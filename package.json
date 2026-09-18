@@ -1,0 +1,16 @@
+{
+  "name": "flare-staff-bot",
+  "version": "1.0.0",
+  "description": "Flare Drop Staff Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
