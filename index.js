@@ -1678,7 +1678,7 @@ if (sub === 'clear') {
   // $ultimate cf <amt> <head|tail> → coin flip
   // $ultimate daily           → claim daily reward
   // $ultimate top             → richest users
-  if (cmd === 'ultimate') {
+  if (cmd === 'flare' || cmd === 'ultimate' || cmd === 'economy') {
     const sub = (args[0] || '').toLowerCase();
 
     // ---- $ultimate add <amount> [@user] ----
@@ -1688,7 +1688,7 @@ if (sub === 'clear') {
       }
       const amount = parseInt(args[1], 10);
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$ultimate add <amount> [@user]`');
+        return message.reply('Usage: `$flare add <amount> [@user]`');
       }
       let target = message.mentions.users.first();
       if (!target && args[2]) {
@@ -1727,10 +1727,10 @@ if (sub === 'clear') {
       amount = numArg ? parseInt(numArg, 10) : NaN;
 
       if (!target || target.bot) {
-        return message.reply('Usage: `$ultimate give @user <amount>`');
+        return message.reply('Usage: `$flare give @user <amount>`');
       }
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$ultimate give @user <amount>`');
+        return message.reply('Usage: `$flare give @user <amount>`');
       }
       if (target.id === message.author.id) {
         return message.reply("You can't give coins to yourself.");
@@ -1762,10 +1762,10 @@ if (sub === 'clear') {
       const choice = (args[2] || '').toLowerCase();
 
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$ultimate cf <amount> <head|tail>`');
+        return message.reply('Usage: `$flare cf <amount> <head|tail>`');
       }
       if (!['head', 'heads', 'h', 'tail', 'tails', 't'].includes(choice)) {
-        return message.reply('Choose **head** or **tail**.\nExample: `$ultimate cf 100 head`');
+        return message.reply('Choose **head** or **tail**.\nExample: `$flare cf 100 head`');
       }
 
       const bal = getCoins(message.author.id);
@@ -1852,7 +1852,7 @@ if (sub === 'clear') {
 
       const embed = new EmbedBuilder()
         .setColor(0xf1c40f)
-        .setTitle('🏆 Ultimate Richest')
+        .setTitle('🏆 Flare Richest')
         .setDescription(lines.join('\n'))
         .setFooter({ text: 'Flare Drop' })
         .setTimestamp();
@@ -1869,7 +1869,7 @@ if (sub === 'clear') {
     const bal = getCoins(target.id);
     const embed = new EmbedBuilder()
       .setColor(0xf1c40f)
-      .setTitle('🪙 Ultimate Balance')
+      .setTitle('🪙 Flare Balance')
       .setDescription(
         target.id === message.author.id
           ? `You have **${bal.toLocaleString()}** coins.`
@@ -3134,15 +3134,48 @@ ${message.author}'s **staff application is ready** — please review.`
     });
   }
 
-  // ========== $fgen <product> — free gen DM ==========
-  if (cmd === 'fgen') {
+  // ========== $fgen / $pgen — gen DM (free OR paid role) ==========
+  if (cmd === 'fgen' || cmd === 'pgen' || cmd === 'paidgen') {
     const member = message.member;
     if (!member) return message.reply('Members only.');
-    if (!member.roles.cache.has(FREE_GEN_ROLE_ID)) {
-      return message.reply(
-        `You need the **free gen** role.\nSet status to \`${FREE_STATUS_TEXT}\` then \`$cstatus\`.`
-      );
+
+    const hasFree = member.roles.cache.has(FREE_GEN_ROLE_ID);
+    const hasPaid = member.roles.cache.has(PAID_GEN_ROLE_ID);
+    const isStaffUser = isStaff(member);
+
+    // $pgen with no product → how to buy
+    if ((cmd === 'pgen' || cmd === 'paidgen') && !args[0]) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xfee75c)
+            .setTitle('💎 Paid Gen')
+            .setDescription(
+              `**Price:** $3 USD\n` +
+                `1. Open a **ticket**\n` +
+                `2. Ping <@&${OWNZ_ROLE_ID}> (**Ownz**)\n` +
+                `3. Pay → get <@&${PAID_GEN_ROLE_ID}>\n` +
+                `4. Then run: \`$pgen mcfa\` or \`$fgen mcfa\`\n\n` +
+                `Website: ${FLARE_WEB}`
+            )
+        ]
+      });
     }
+
+    if (!hasFree && !hasPaid && !isStaffUser) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xed4245)
+            .setTitle('❌ No gen access')
+            .setDescription(
+              `**Free:** status \`${FREE_STATUS_TEXT}\` → \`$cstatus\`\n` +
+                `**Paid:** $3 → role <@&${PAID_GEN_ROLE_ID}> → \`$pgen mcfa\``
+            )
+        ]
+      });
+    }
+
     const product = resolveProductKey(args[0] || 'mcfa') || 'mcfa';
     const meta = PRODUCT_STOCKS[product];
     if (!meta) return message.reply('Unknown product. Try: mcfa, xbox, netflix, crunchyroll, …');
@@ -3158,32 +3191,14 @@ ${message.author}'s **staff application is ready** — please review.`
       saveData();
       return message.reply('Could not DM you — open your DMs and try again. Stock restored.');
     }
+    const tier = hasPaid ? 'Paid' : hasFree ? 'Free' : 'Staff';
     return message.reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0x57f287)
-          .setTitle('✅ Free gen sent')
+          .setColor(hasPaid ? 0xfee75c : 0x57f287)
+          .setTitle(`✅ ${tier} gen sent`)
           .setDescription(
-            `**${meta.emoji} ${meta.label}** was sent to your DMs.\n# ARE WE LEGIT?\nCheck your DMs.`
-          )
-      ]
-    });
-  }
-
-  // ========== $pgen — paid gen info ==========
-  if (cmd === 'pgen' || cmd === 'paidgen') {
-    return message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xfee75c)
-          .setTitle('💎 Paid Gen')
-          .setDescription(
-            `**Price:** $3 USD\n` +
-              `1. Open a **ticket**\n` +
-              `2. Ping <@&${OWNZ_ROLE_ID}> (**Ownz**)\n` +
-              `3. Pay & receive stock\n\n` +
-              `Paid role: <@&${PAID_GEN_ROLE_ID}>\n` +
-              `Website: ${FLARE_WEB}`
+            `**${meta.emoji} ${meta.label}** sent to your **DMs**.\n# ARE WE LEGIT?\nCheck your DMs.`
           )
       ]
     });
@@ -3192,31 +3207,104 @@ ${message.author}'s **staff application is ready** — please review.`
   // ========== $msg — set / post role tutorial ==========
   if (cmd === 'msg') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
+    if (!data.msgFree) data.msgFree = '';
+    if (!data.msgPaid) data.msgPaid = '';
+
     const sub = (args[0] || '').toLowerCase();
-    if (sub === 'set') {
-      const rest = body.slice(body.toLowerCase().indexOf('set') + 3).trim();
-      if (!rest) return message.reply('Usage: `$msg set <tutorial text>`');
-      data.tutorialMsg = rest;
+    const sub2 = (args[1] || '').toLowerCase();
+
+    // $msg free set <text>
+    // $msg paid set <text>
+    // $msg set free <text>  (alt)
+    // $msg free  → post free embed
+    // $msg paid  → post paid embed
+    // $msg       → post both
+
+    const isFree = sub === 'free' || sub2 === 'free';
+    const isPaid = sub === 'paid' || sub2 === 'paid';
+    const isSet = sub === 'set' || sub2 === 'set';
+
+    if (isSet && (isFree || isPaid || sub === 'set')) {
+      // Find text after "set"
+      const idx = body.toLowerCase().indexOf('set');
+      let rest = idx >= 0 ? body.slice(idx + 3).trim() : '';
+      // strip leading free/paid keyword if present after set
+      rest = rest.replace(/^(free|paid)\s+/i, '').trim();
+      // if order was $msg free set ...
+      if ((sub === 'free' || sub === 'paid') && sub2 === 'set') {
+        const i2 = body.toLowerCase().indexOf('set');
+        rest = i2 >= 0 ? body.slice(i2 + 3).trim() : rest;
+      }
+      if (!rest) {
+        return message.reply(
+          'Usage:\n' +
+            '`$msg free set <text>`\n' +
+            '`$msg paid set <text>`'
+        );
+      }
+      if (isFree || (sub === 'set' && args[1]?.toLowerCase() === 'free')) {
+        data.msgFree = rest;
+        saveData();
+        return message.reply('✅ **Free Gen** tutorial text saved. Post with `$msg free`.');
+      }
+      if (isPaid || (sub === 'set' && args[1]?.toLowerCase() === 'paid')) {
+        data.msgPaid = rest;
+        saveData();
+        return message.reply('✅ **Paid Gen** tutorial text saved. Post with `$msg paid`.');
+      }
+      // bare $msg set → save as free by default
+      data.msgFree = rest;
       saveData();
-      return message.reply('Tutorial message saved. Use `$msg` to post it.');
+      return message.reply('Saved as **Free** text. Use `$msg free set` / `$msg paid set` for separate ones.');
     }
-    const textMsg =
-      data.tutorialMsg ||
-      `**How to get Free Gen**\n` +
-        `1. Set custom status to:\n\`${FREE_STATUS_TEXT}\`\n` +
-        `2. Run \`$cstatus\`\n` +
-        `3. Run \`$fgen mcfa\` (or other product)\n\n` +
-        `**Paid Gen ($3)** — ticket + ping Ownz\n` +
-        `${FLARE_WEB}`;
-    return message.channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865f2)
-          .setTitle('📖 Role & Gen tutorial')
-          .setDescription(textMsg.slice(0, 4000))
-          .setFooter({ text: 'Flare Staff Bot' })
-      ]
-    });
+
+    const defaultFree =
+      `Add our status text to your **Discord custom status** to get instant access to **Free Gen**!\n\n` +
+      `📌 **Copy & Paste status text below:**\n` +
+      `\`\`\`\n${FREE_STATUS_TEXT}\n\`\`\`\n` +
+      `➡️ **Once updated**, your **Free Gen** role will be granted automatically!\n` +
+      `(Or run \`$cstatus\` to check / refresh.)\n\n` +
+      `Then use \`$fgen mcfa\` (or xbox / netflix / …) to receive stock in **DMs**.`;
+
+    const defaultPaid =
+      `**Price: $3 USD**\n\n` +
+      `1️⃣ Create a **ticket**\n` +
+      `2️⃣ Pay **$3** to **Ownz** <@&${OWNZ_ROLE_ID}>\n` +
+      `3️⃣ Staff will give you the **Paid Gen** role <@&${PAID_GEN_ROLE_ID}>\n\n` +
+      `Website: ${FLARE_WEB}`;
+
+    const freeEmbed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('🟢 ACCESS FREE GEN')
+      .setDescription((data.msgFree || defaultFree).slice(0, 4000))
+      .setFooter({ text: 'Flare Rewards / Flare Drop' })
+      .setTimestamp();
+
+    const paidEmbed = new EmbedBuilder()
+      .setColor(0xfee75c)
+      .setTitle('💎 ACCESS PAID GEN')
+      .setDescription((data.msgPaid || defaultPaid).slice(0, 4000))
+      .setFooter({ text: 'Flare Rewards / Flare Drop' })
+      .setTimestamp();
+
+    if (sub === 'free') {
+      return message.channel.send({ embeds: [freeEmbed] });
+    }
+    if (sub === 'paid') {
+      return message.channel.send({ embeds: [paidEmbed] });
+    }
+    if (!sub) {
+      return message.channel.send({ embeds: [freeEmbed, paidEmbed] });
+    }
+
+    return message.reply(
+      '**Tutorial embeds**\n' +
+        '`$msg free set <text>` — save Free Gen message\n' +
+        '`$msg paid set <text>` — save Paid Gen message\n' +
+        '`$msg free` — post Free embed\n' +
+        '`$msg paid` — post Paid embed\n' +
+        '`$msg` — post both'
+    );
   }
 
 
@@ -3272,14 +3360,14 @@ ${message.author}'s **staff application is ready** — please review.`
           '`$teamup @user(s)` — create private TeamUp channel',
           '`$close` / `$leave` — inside TeamUp channels',
           '',
-          '**Ultimate Economy**',
-          '`$ultimate` — show your coins',
-          '`$ultimate @user` — show someone\'s coins',
-          '`$ultimate give @user <amt>` — send coins',
-          '`$ultimate daily` — claim daily reward',
-          '`$ultimate cf <amt> <head|tail>` — coin flip',
-          '`$ultimate top` — richest users',
-          '`$ultimate add <amt> [@user]` — add coins (Owner/Co-Owner)',
+          '**Flare Economy**',
+          '`$flare` — show your coins',
+          '`$flare @user` — show someone\'s coins',
+          '`$flare give @user <amt>` — send coins',
+          '`$flare daily` — claim daily reward',
+          '`$flare cf <amt> <head|tail>` — coin flip',
+          '`$flare top` — richest users',
+          '`$flare add <amt> [@user]` — add coins (Owner/Co-Owner)',
           '',
           '**Other**',
           '`$format email:pass` — validate email domain/format (no login)',
