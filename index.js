@@ -42,15 +42,19 @@ const MASS_PING_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 // Product stock keys (Ultimate multi-stock)
 const PRODUCT_STOCKS = {
-  mcfa: { label: 'MCFA', emoji: '🟩', cmd: ['mcfa'] },
-  donut: { label: 'DONUT', emoji: '🍩', cmd: ['donut'] },
-  hypixel: { label: 'HYPIXEL', emoji: '⚔️', cmd: ['hypixel', 'hyp'] },
-  nitro: { label: 'NITRO', emoji: '💜', cmd: ['nitro'] },
-  netflix: { label: 'NETFLIX', emoji: '🎬', cmd: ['netflix'] },
-  steam: { label: 'STEAM', emoji: '🎮', cmd: ['steam'] },
-  crunchyroll: { label: 'CRUNCHYROLL', emoji: '🍥', cmd: ['crunchyroll', 'cruncyroll', 'cr'] },
-  xbox: { label: 'XBOX', emoji: '🎮', cmd: ['xbox'] },
-  custom: { label: 'CUSTOM', emoji: '📦', cmd: ['custom'] }
+  // original finite stock
+  mcfa: { label: 'MCFA', emoji: '🟩', cmd: ['mcfa'], type: 'stock' },
+  nitro: { label: 'NITRO', emoji: '💜', cmd: ['nitro'], type: 'stock' },
+  netflix: { label: 'NETFLIX', emoji: '🎬', cmd: ['netflix'], type: 'stock' },
+  crunchyroll: { label: 'CRUNCHYROLL', emoji: '🍥', cmd: ['crunchyroll', 'cruncyroll', 'cr'], type: 'stock' },
+  // new = full methods (unlimited same text)
+  mcredeem: { label: 'McRedeem Code', emoji: '🎟️', cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
+  mccode: { label: 'McCode Method', emoji: '📜', cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
+  xbox: { label: 'Xbox Codes', emoji: '🎮', cmd: ['xbox', 'xboxcodes', 'xboxcode'], type: 'method' },
+  xboxmethod: { label: 'XboxCode Method', emoji: '📘', cmd: ['xboxmethod', 'xboxcodemethod'], type: 'method' },
+  nitromethod: { label: 'Nitro Method', emoji: '💎', cmd: ['nitromethod', 'nitrom'], type: 'method' },
+  xboxgift: { label: 'Xbox Gift Card Method', emoji: '🎁', cmd: ['xboxgift', 'xboxgiftcard', 'xboxgiftmethod'], type: 'method' },
+  netflixnocc: { label: 'Netflix Method NoCC', emoji: '📺', cmd: ['netflixnocc', 'netflixmethod', 'nfnocc'], type: 'method' }
 };
 
 const VOUCH_CHANNEL_ID = process.env.VOUCH_CHANNEL_ID || ''; // disabled for Flare
@@ -465,21 +469,19 @@ async function startRewardClaimFlow(channel, user) {
     // Auto-deliver from stock INTO THE TICKET (not DM)
     const nameL = chosen.name.toLowerCase();
     let productKey = 'mcfa';
-    if (nameL.includes('netflix')) productKey = 'netflix';
+    if (nameL.includes('netflix') && (nameL.includes('nocc') || nameL.includes('no cc') || nameL.includes('method')))
+      productKey = 'netflixnocc';
+    else if (nameL.includes('netflix')) productKey = 'netflix';
     else if (nameL.includes('crunchy')) productKey = 'crunchyroll';
+    else if (nameL.includes('xbox') && nameL.includes('gift')) productKey = 'xboxgift';
+    else if (nameL.includes('xbox') && nameL.includes('method')) productKey = 'xboxmethod';
     else if (nameL.includes('xbox')) productKey = 'xbox';
+    else if (nameL.includes('nitro') && nameL.includes('method')) productKey = 'nitromethod';
     else if (nameL.includes('nitro')) productKey = 'nitro';
-    else if (nameL.includes('steam')) productKey = 'steam';
-    else if (nameL.includes('donut')) productKey = 'donut';
-    else if (nameL.includes('hypixel')) productKey = 'hypixel';
-    else if (nameL.includes('method') || nameL.includes('robux')) {
-      await channel.send(
-        `${user} selected **${chosen.name}** (method reward).
-` +
-          `Staff will complete this manually. <@&${OWNER_ROLE_ID}>`
-      ).catch(() => {});
-      return;
-    }
+    else if (nameL.includes('mcredeem') || (nameL.includes('redeem') && nameL.includes('mc')))
+      productKey = 'mcredeem';
+    else if (nameL.includes('mccode') || (nameL.includes('code') && nameL.includes('method') && nameL.includes('mc')))
+      productKey = 'mccode';
 
     const taken = await takeFromStock(productKey, 1);
     if (!taken) {
@@ -809,6 +811,22 @@ async function deliverProductWithVouch(message, user, productKey, items, skipVou
   const list = Array.isArray(items) ? items : [items];
 
   try {
+    if (isMethodProduct(productKey)) {
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xbe2c71)
+            .setTitle(`Flare Drop — ${meta.label}`)
+            .setDescription(
+              `# ARE WE LEGIT?
+Delivered by **${staff.username}**
+Full method is in the spoiler message(s) below.`
+            )
+        ]
+      });
+      for (const it of list) await sendLongSpoiler(user, meta.label, it);
+      return true;
+    }
     await user.send({
       embeds: [
         new EmbedBuilder()
@@ -839,8 +857,43 @@ async function deliverProductWithVouch(message, user, productKey, items, skipVou
   }
 }
 
+function isMethodProduct(productKey) {
+  return PRODUCT_STOCKS[productKey]?.type === 'method';
+}
+function getMethodText(productKey) {
+  ensureStocks(data);
+  const text = data.methods?.[productKey];
+  return text && String(text).trim() ? String(text) : null;
+}
+function setMethodText(productKey, text) {
+  ensureStocks(data);
+  if (!data.methods) data.methods = {};
+  data.methods[productKey] = String(text || '');
+  saveData();
+}
+async function sendLongSpoiler(target, title, text) {
+  const body = String(text || '');
+  if (body.length <= 1800) {
+    await target.send(`**${title}**
+||${body}||`);
+    return;
+  }
+  const chunkSize = 1700;
+  let part = 1;
+  for (let i = 0; i < body.length; i += chunkSize) {
+    const slice = body.slice(i, i + chunkSize);
+    await target.send(`**${title}** (part ${part})
+||${slice}||`);
+    part++;
+  }
+}
 async function takeFromStock(productKey, amount) {
   ensureStocks(data);
+  if (isMethodProduct(productKey)) {
+    const text = getMethodText(productKey);
+    if (!text) return null;
+    return Array.from({ length: amount || 1 }, () => text);
+  }
   const arr = data.stocks[productKey] || [];
   if (arr.length < amount) return null;
   const taken = arr.splice(0, amount);
@@ -1118,6 +1171,43 @@ client.on('messageCreate', async (message) => {
     const meta = PRODUCT_STOCKS[productKey];
     const sub = (args[0] || '').toLowerCase();
     ensureStocks(data);
+
+    if (meta.type === 'method') {
+      if (!sub || sub === 'count' || sub === 'left' || sub === 'status') {
+        const has = !!getMethodText(productKey);
+        return message.reply(
+          `${meta.emoji} **${meta.label}** · ${has ? '**set** (∞)' : '**not set**'}\n` +
+            `\`$${cmd} set <paste full method text>\``
+        );
+      }
+      if (sub === 'list' || sub === 'show' || sub === 'view') {
+        const text = getMethodText(productKey);
+        if (!text) return message.reply(`No **${meta.label}** yet.`);
+        await message.channel.send(`**${meta.label}** (staff preview)`);
+        await sendLongSpoiler(message.channel, meta.label, text);
+        return;
+      }
+      if (sub === 'set' || sub === 'add') {
+        let rest = body.slice(body.toLowerCase().indexOf(sub) + sub.length).trim();
+        if (rest.startsWith('```')) {
+          rest = rest.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim();
+        }
+        if (!rest) {
+          return message.reply(`Paste the **full method** after the command:\n\`$${cmd} set\` + entire guide`);
+        }
+        setMethodText(productKey, rest);
+        return message.reply(
+          `${meta.emoji} **${meta.label}** saved (${rest.length} chars). Unlimited delivery.`
+        );
+      }
+      if (sub === 'clear') {
+        setMethodText(productKey, '');
+        return message.reply(`Cleared **${meta.label}**.`);
+      }
+      return message.reply(
+        `**${meta.label}** (method ∞)\n\`$${cmd} set <full text>\` · \`$${cmd} show\` · \`$${cmd} clear\``
+      );
+    }
 
     if (!sub || sub === 'count' || sub === 'left') {
       return message.reply(
@@ -2638,7 +2728,7 @@ if (sub === 'clear') {
       }
 
       ensureStocks(data);
-      const available = Object.keys(PRODUCT_STOCKS).filter((k) => getStock(k).length > 0);
+      const available = Object.keys(PRODUCT_STOCKS).filter((k) => (PRODUCT_STOCKS[k].type === 'method' ? !!getMethodText(k) : getStock(k).length > 0));
       if (!available.length) {
         return message.reply('No stock left in any product for daily pay.');
       }
@@ -2783,7 +2873,7 @@ if (sub === 'clear') {
     ensureStocks(data);
     let key = getStock('custom').length ? 'custom' : null;
     if (!key) {
-      const avail = Object.keys(PRODUCT_STOCKS).filter((k) => getStock(k).length);
+      const avail = Object.keys(PRODUCT_STOCKS).filter((k) => (PRODUCT_STOCKS[k].type === 'method' ? !!getMethodText(k) : getStock(k).length));
       key = avail[0] || null;
     }
     if (!key) return message.reply('No stock available for a birthday gift.');
