@@ -235,9 +235,24 @@ http
         res.end(fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8'));
         return;
       }
-      if (pathName === '/logo.png' || pathName === '/bg-desktop.jpg' || pathName === '/bg-mobile.jpg') {
-        const f = path.join(__dirname, 'public', pathName.slice(1));
-        const type = pathName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      if (
+        pathName === '/logo.png' ||
+        pathName === '/bg-desktop.jpg' ||
+        pathName === '/bg-desktop.jpeg' ||
+        pathName === '/bg-mobile.jpg' ||
+        pathName === '/bg-mobile.jpeg'
+      ) {
+        const name = pathName.slice(1);
+        let f = path.join(__dirname, 'public', name);
+        if (!fs.existsSync(f) && name.endsWith('.jpg')) {
+          f = path.join(__dirname, 'public', name.replace(/\.jpg$/, '.jpeg'));
+        }
+        if (!fs.existsSync(f)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Not found');
+          return;
+        }
+        const type = name.endsWith('.png') ? 'image/png' : 'image/jpeg';
         res.writeHead(200, { 'Content-Type': type });
         res.end(fs.readFileSync(f));
         return;
@@ -372,12 +387,84 @@ http
         saveData();
         return json(200, { ok: true });
       }
+      if (pathName === '/api/overview') {
+        ensureStocks(data);
+        let payTotal = 0, genTotal = 0, methodsSet = 0;
+        for (const key of Object.keys(PRODUCT_STOCKS)) {
+          if (PRODUCT_STOCKS[key].type === 'method') {
+            if (getMethodText(key)) methodsSet++;
+          } else {
+            payTotal += getStock(key).length;
+            genTotal += getStock(key, 'gen').length;
+          }
+        }
+        const gw = Object.keys(data.giveaways || {}).length;
+        const warnUsers = Object.keys(data.warnings || {}).length;
+        const coinUsers = Object.keys(data.coins || {}).length;
+        return json(200, { payTotal, genTotal, methodsSet, giveaways: gw, warnUsers, coinUsers });
+      }
+      if (pathName === '/api/payadd' && req.method === 'POST') {
+        const body = await parseBody();
+        const product = resolveProductKey(body.product);
+        if (!product || PRODUCT_STOCKS[product]?.type === 'method') return json(400, { error: 'Bad product' });
+        const lines = String(body.lines || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const arr = getStock(product);
+        let added = 0;
+        for (const a of lines) {
+          if (!arr.includes(a)) { arr.push(a); added++; }
+        }
+        setStock(product, arr);
+        saveData();
+        return json(200, { added, total: arr.length });
+      }
+      if (pathName === '/api/methods') {
+        ensureStocks(data);
+        if (req.method === 'GET') {
+          const methods = {};
+          for (const key of Object.keys(PRODUCT_STOCKS)) {
+            if (PRODUCT_STOCKS[key].type === 'method') methods[key] = getMethodText(key) || '';
+          }
+          return json(200, { methods });
+        }
+        if (req.method === 'POST') {
+          const body = await parseBody();
+          const product = resolveProductKey(body.product);
+          if (!product || PRODUCT_STOCKS[product]?.type !== 'method') return json(400, { error: 'Bad product' });
+          if (!data.methods) data.methods = {};
+          data.methods[product] = String(body.text || '').trim();
+          saveData();
+          return json(200, { ok: true });
+        }
+      }
+      if (pathName === '/api/giveaways') {
+        const list = Object.entries(data.giveaways || {}).map(([id, g]) => ({
+          id,
+          prize: g.prize,
+          winners: g.winners,
+          ends: g.ends,
+          channelId: g.channelId,
+          entries: g.entries || [],
+          hostId: g.hostId
+        }));
+        return json(200, { giveaways: list });
+      }
+      if (pathName === '/api/warnings') {
+        const users = Object.entries(data.warnings || {}).map(([userId, arr]) => ({
+          userId,
+          count: (arr || []).length,
+          lastReason: (arr && arr.length ? arr[arr.length - 1].reason : '') || ''
+        }));
+        users.sort((a, b) => b.count - a.count);
+        return json(200, { users });
+      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('Flare Staff Bot online');
     } catch (e) {
       console.error('http', e);
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('error');
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('error');
+      }
     }
   })
   .listen(PORT, '0.0.0.0', () => console.log(`Flare dashboard + bot on port ${PORT}`));
