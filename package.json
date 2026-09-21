@@ -1,7 +1,7 @@
 {
   "name": "flare-staff-bot",
   "version": "1.0.0",
-  "description": "Flare Drop Staff Bot",
+  "description": "Flare Drop Staff Bot + Dashboard",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

@@ -235,9 +235,24 @@ http
         res.end(fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8'));
         return;
       }
-      if (pathName === '/logo.png' || pathName === '/bg-desktop.jpg' || pathName === '/bg-mobile.jpg') {
-        const f = path.join(__dirname, 'public', pathName.slice(1));
-        const type = pathName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      if (
+        pathName === '/logo.png' ||
+        pathName === '/bg-desktop.jpg' ||
+        pathName === '/bg-desktop.jpeg' ||
+        pathName === '/bg-mobile.jpg' ||
+        pathName === '/bg-mobile.jpeg'
+      ) {
+        const name = pathName.slice(1);
+        let f = path.join(__dirname, 'public', name);
+        if (!fs.existsSync(f) && name.endsWith('.jpg')) {
+          f = path.join(__dirname, 'public', name.replace(/\.jpg$/, '.jpeg'));
+        }
+        if (!fs.existsSync(f)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Not found');
+          return;
+        }
+        const type = name.endsWith('.png') ? 'image/png' : 'image/jpeg';
         res.writeHead(200, { 'Content-Type': type });
         res.end(fs.readFileSync(f));
         return;
@@ -372,12 +387,84 @@ http
         saveData();
         return json(200, { ok: true });
       }
+      if (pathName === '/api/overview') {
+        ensureStocks(data);
+        let payTotal = 0, genTotal = 0, methodsSet = 0;
+        for (const key of Object.keys(PRODUCT_STOCKS)) {
+          if (PRODUCT_STOCKS[key].type === 'method') {
+            if (getMethodText(key)) methodsSet++;
+          } else {
+            payTotal += getStock(key).length;
+            genTotal += getStock(key, 'gen').length;
+          }
+        }
+        const gw = Object.keys(data.giveaways || {}).length;
+        const warnUsers = Object.keys(data.warnings || {}).length;
+        const coinUsers = Object.keys(data.coins || {}).length;
+        return json(200, { payTotal, genTotal, methodsSet, giveaways: gw, warnUsers, coinUsers });
+      }
+      if (pathName === '/api/payadd' && req.method === 'POST') {
+        const body = await parseBody();
+        const product = resolveProductKey(body.product);
+        if (!product || PRODUCT_STOCKS[product]?.type === 'method') return json(400, { error: 'Bad product' });
+        const lines = String(body.lines || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const arr = getStock(product);
+        let added = 0;
+        for (const a of lines) {
+          if (!arr.includes(a)) { arr.push(a); added++; }
+        }
+        setStock(product, arr);
+        saveData();
+        return json(200, { added, total: arr.length });
+      }
+      if (pathName === '/api/methods') {
+        ensureStocks(data);
+        if (req.method === 'GET') {
+          const methods = {};
+          for (const key of Object.keys(PRODUCT_STOCKS)) {
+            if (PRODUCT_STOCKS[key].type === 'method') methods[key] = getMethodText(key) || '';
+          }
+          return json(200, { methods });
+        }
+        if (req.method === 'POST') {
+          const body = await parseBody();
+          const product = resolveProductKey(body.product);
+          if (!product || PRODUCT_STOCKS[product]?.type !== 'method') return json(400, { error: 'Bad product' });
+          if (!data.methods) data.methods = {};
+          data.methods[product] = String(body.text || '').trim();
+          saveData();
+          return json(200, { ok: true });
+        }
+      }
+      if (pathName === '/api/giveaways') {
+        const list = Object.entries(data.giveaways || {}).map(([id, g]) => ({
+          id,
+          prize: g.prize,
+          winners: g.winners,
+          ends: g.ends,
+          channelId: g.channelId,
+          entries: g.entries || [],
+          hostId: g.hostId
+        }));
+        return json(200, { giveaways: list });
+      }
+      if (pathName === '/api/warnings') {
+        const users = Object.entries(data.warnings || {}).map(([userId, arr]) => ({
+          userId,
+          count: (arr || []).length,
+          lastReason: (arr && arr.length ? arr[arr.length - 1].reason : '') || ''
+        }));
+        users.sort((a, b) => b.count - a.count);
+        return json(200, { users });
+      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('Flare Staff Bot online');
     } catch (e) {
       console.error('http', e);
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('error');
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('error');
+      }
     }
   })
   .listen(PORT, '0.0.0.0', () => console.log(`Flare dashboard + bot on port ${PORT}`));
@@ -867,6 +954,7 @@ async function onReady() {
   try {
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     const cmds = [
+      new SlashCommandBuilder().setName('help').setDescription('List bot commands'),
       new SlashCommandBuilder().setName('gstart').setDescription('Start giveaway')
         .addStringOption(o => o.setName('time').setDescription('10m / 1h / 1d').setRequired(true))
         .addIntegerOption(o => o.setName('winners').setDescription('Number of winners').setRequired(true))
@@ -875,6 +963,37 @@ async function onReady() {
         .addStringOption(o => o.setName('message_id').setDescription('Giveaway message id').setRequired(true)),
       new SlashCommandBuilder().setName('stock').setDescription('View pay + gen stock'),
       new SlashCommandBuilder().setName('genstock').setDescription('View gen stock'),
+      new SlashCommandBuilder().setName('genadd').setDescription('Add accounts to gen stock (staff)')
+        .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…').setRequired(true))
+        .addStringOption(o => o.setName('lines').setDescription('Accounts, one per line or space-separated').setRequired(true)),
+      new SlashCommandBuilder().setName('pay').setDescription('Pay a user from stock (staff)')
+        .addUserOption(o => o.setName('user').setDescription('User to pay').setRequired(true))
+        .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…'))
+        .addIntegerOption(o => o.setName('amount').setDescription('How many (default 1)')),
+      new SlashCommandBuilder().setName('claim').setDescription('Claim invite reward (use in ticket)'),
+      new SlashCommandBuilder().setName('fgen').setDescription('Free gen — take 1 from gen stock')
+        .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…')),
+      new SlashCommandBuilder().setName('pgen').setDescription('Paid gen — take 1 from gen stock')
+        .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…')),
+      new SlashCommandBuilder().setName('cstatus').setDescription('Check free-gen status requirement'),
+      new SlashCommandBuilder().setName('best').setDescription('Top members in a role by messages + invites')
+        .addRoleOption(o => o.setName('role').setDescription('Role').setRequired(true)),
+      new SlashCommandBuilder().setName('online').setDescription('Show online members in a role')
+        .addRoleOption(o => o.setName('role').setDescription('Role').setRequired(true)),
+      new SlashCommandBuilder().setName('staffstats').setDescription('Staff team overview'),
+      new SlashCommandBuilder().setName('flare').setDescription('Economy: balance / top / daily')
+        .addStringOption(o => o.setName('action').setDescription('balance | top | daily | give')
+          .addChoices(
+            { name: 'balance', value: 'balance' },
+            { name: 'top', value: 'top' },
+            { name: 'daily', value: 'daily' },
+            { name: 'give', value: 'give' }
+          ))
+        .addUserOption(o => o.setName('user').setDescription('User (for balance/give)'))
+        .addIntegerOption(o => o.setName('amount').setDescription('Amount (for give)')),
+      new SlashCommandBuilder().setName('invites').setDescription('Show invite count')
+        .addUserOption(o => o.setName('user').setDescription('User (optional)')),
+      new SlashCommandBuilder().setName('clear').setDescription('Clear MCFA pay stock (staff)'),
       new SlashCommandBuilder().setName('ban').setDescription('Ban a member')
         .addUserOption(o => o.setName('user').setDescription('User to ban').setRequired(true))
         .addStringOption(o => o.setName('reason').setDescription('Reason')),
@@ -891,10 +1010,32 @@ async function onReady() {
         .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
         .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(true)),
       new SlashCommandBuilder().setName('warnings').setDescription('List warnings for a user')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+      new SlashCommandBuilder().setName('staff').setDescription('Staff apply open/close or apply')
+        .addStringOption(o => o.setName('action').setDescription('apply | open | close').setRequired(true)
+          .addChoices(
+            { name: 'apply', value: 'apply' },
+            { name: 'open', value: 'open' },
+            { name: 'close', value: 'close' }
+          )),
+      new SlashCommandBuilder().setName('daily').setDescription('Daily tools (staff)')
+        .addStringOption(o => o.setName('mode').setDescription('pay = spin reward for user')
+          .addChoices({ name: 'pay', value: 'pay' }))
+        .addUserOption(o => o.setName('user').setDescription('User for daily pay')),
+      new SlashCommandBuilder().setName('teamup').setDescription('Create TeamUp channel with users')
+        .addUserOption(o => o.setName('user1').setDescription('Member 1').setRequired(true))
+        .addUserOption(o => o.setName('user2').setDescription('Member 2'))
+        .addUserOption(o => o.setName('user3').setDescription('Member 3')),
+      new SlashCommandBuilder().setName('close').setDescription('Close TeamUp channel (creator/staff)'),
+      new SlashCommandBuilder().setName('leave').setDescription('Leave TeamUp channel'),
+      new SlashCommandBuilder().setName('format').setDescription('Validate email:pass format')
+        .addStringOption(o => o.setName('account').setDescription('email:pass').setRequired(true)),
+      new SlashCommandBuilder().setName('salary').setDescription('Send salary reward (restricted)')
         .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setDescription('How many'))
     ].map(c => c.toJSON());
     await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
-    console.log('Slash: /gstart /greroll /stock /genstock /ban /kick /timeout /warn');
+    console.log('Slash commands registered (help pay claim stock fgen pgen …)');
   } catch (e) {
     console.error('slash register', e.message);
   }
@@ -4248,6 +4389,340 @@ client.on('interactionCreate', async (interaction) => {
           ephemeral: true
         });
       }
+
+      if (name === 'help') {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x5865f2)
+              .setTitle('Flare Staff Bot — Slash commands')
+              .setDescription(
+                [
+                  '`/help` `/stock` `/genstock` `/genadd`',
+                  '`/pay` `/claim` `/fgen` `/pgen` `/cstatus`',
+                  '`/best` `/online` `/staffstats` `/invites`',
+                  '`/flare` `/gstart` `/greroll` `/clear`',
+                  '`/ban` `/kick` `/timeout` `/untimeout` `/warn` `/warnings`',
+                  '`/staff` `/daily` `/teamup` `/close` `/leave`',
+                  '`/format` `/salary`',
+                  '',
+                  'Prefix `$` commands still work the same.'
+                ].join('\n')
+              )
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (name === 'best') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        const role = interaction.options.getRole('role');
+        try { await interaction.guild.members.fetch(); } catch (_) {}
+        const membersWithRole = interaction.guild.members.cache.filter(
+          (m) => !m.user.bot && m.roles.cache.has(role.id)
+        );
+        if (!membersWithRole.size) return interaction.reply({ content: `No members with **${role.name}**.`, ephemeral: true });
+        const ranked = [...membersWithRole.values()]
+          .map((m) => {
+            const messages = data.messages[interaction.guild.id]?.[m.id] || 0;
+            const invites = data.invites[interaction.guild.id]?.[m.id] || 0;
+            return { m, messages, invites, score: messages + invites * 25 };
+          })
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 15);
+        const lines = ranked.map((r, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `**${i + 1}.**`;
+          return `${medal} ${r.m} — **${r.score}** pts · 💬 ${r.messages} · 🎟️ ${r.invites}`;
+        });
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xe8c84a)
+              .setTitle(`Best in @${role.name}`)
+              .setDescription(lines.join('\n') || 'No data yet.')
+              .setFooter({ text: 'Score = messages + (invites × 25)' })
+          ]
+        });
+      }
+
+      if (name === 'online') {
+        if (!isStaff(interaction.member) && !canViewStock(interaction.member)) {
+          return interaction.reply({ content: 'Staff / members only.', ephemeral: true });
+        }
+        const role = interaction.options.getRole('role');
+        try { await interaction.guild.members.fetch(); } catch (_) {}
+        const online = role.members.filter(
+          (m) => !m.user.bot && m.presence && ['online', 'idle', 'dnd'].includes(m.presence.status)
+        );
+        const lines = [...online.values()].slice(0, 40).map((m) => `• ${m.displayName}`);
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x57f287)
+              .setTitle(`Online — @${role.name}`)
+              .setDescription(lines.join('\n') || 'None online.')
+              .setFooter({ text: `${online.size} online` })
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (name === 'staffstats') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        const roles = [
+          ['Owner', OWNER_ROLE_ID],
+          ['Co-Owner', CO_OWNER_ROLE_ID],
+          ['Manager', MANAGER_ROLE_ID],
+          ['Head Admin', HEAD_ADMIN_ROLE_ID],
+          ['Admin', ADMIN_ROLE_ID],
+          ['Staff', STAFF_TEAM_ROLE_ID]
+        ];
+        try { await interaction.guild.members.fetch(); } catch (_) {}
+        const lines = roles.map(([label, id]) => {
+          if (!id) return null;
+          const role = interaction.guild.roles.cache.get(id);
+          if (!role) return `**${label}** — role missing`;
+          const n = role.members.filter((m) => !m.user.bot).size;
+          return `**${label}** — ${n} members`;
+        }).filter(Boolean);
+        return interaction.reply({
+          embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle('Staff stats').setDescription(lines.join('\n'))],
+          ephemeral: true
+        });
+      }
+
+      if (name === 'invites') {
+        const user = interaction.options.getUser('user') || interaction.user;
+        const n = getUserInvites(interaction.guildId, user.id);
+        return interaction.reply({ content: `**${user.tag}** has **${n}** invites tracked.`, ephemeral: true });
+      }
+
+      if (name === 'flare') {
+        const action = interaction.options.getString('action') || 'balance';
+        const target = interaction.options.getUser('user') || interaction.user;
+        if (action === 'top') {
+          const entries = Object.entries(data.coins || {}).sort((a, b) => b[1] - a[1]).slice(0, 10);
+          const lines = entries.map(([id, c], i) => `**${i + 1}.** <@${id}> — **${c}**`);
+          return interaction.reply({
+            embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle('Flare top').setDescription(lines.join('\n') || 'Empty')],
+            ephemeral: true
+          });
+        }
+        if (action === 'daily') {
+          const key = interaction.user.id;
+          if (!data.daily) data.daily = {};
+          const last = data.daily[key] || 0;
+          if (Date.now() - last < 20 * 60 * 60 * 1000) {
+            return interaction.reply({ content: 'Daily already claimed. Try again later.', ephemeral: true });
+          }
+          data.daily[key] = Date.now();
+          addCoins(key, 50);
+          return interaction.reply({ content: 'Daily claimed: **+50** coins.', ephemeral: true });
+        }
+        if (action === 'give') {
+          const amt = interaction.options.getInteger('amount') || 0;
+          const to = interaction.options.getUser('user');
+          if (!to || amt < 1) return interaction.reply({ content: 'Need user + amount.', ephemeral: true });
+          if (getCoins(interaction.user.id) < amt) return interaction.reply({ content: 'Not enough coins.', ephemeral: true });
+          addCoins(interaction.user.id, -amt);
+          addCoins(to.id, amt);
+          return interaction.reply({ content: `Sent **${amt}** coins to **${to.tag}**.` });
+        }
+        return interaction.reply({
+          content: `**${target.tag}** has **${getCoins(target.id)}** coins.`,
+          ephemeral: true
+        });
+      }
+
+      if (name === 'clear') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        setStock('mcfa', []);
+        saveData();
+        return interaction.reply({ content: 'MCFA pay stock cleared.', ephemeral: true });
+      }
+
+      if (name === 'genadd') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        const product = resolveProductKey(interaction.options.getString('product'));
+        if (!product || PRODUCT_STOCKS[product]?.type === 'method') {
+          return interaction.reply({ content: 'Bad product.', ephemeral: true });
+        }
+        const lines = String(interaction.options.getString('lines') || '')
+          .split(/[\n,]+/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const arr = getStock(product, 'gen');
+        let added = 0;
+        for (const a of lines) {
+          if (!arr.includes(a)) { arr.push(a); added++; }
+        }
+        setStock(product, arr, 'gen');
+        saveData();
+        return interaction.reply({ content: `Added **${added}** to gen **${product}** (total ${arr.length}).`, ephemeral: true });
+      }
+
+      if (name === 'cstatus') {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x57f287)
+              .setTitle('Free gen status')
+              .setDescription(`Set your status to:\n\`${FREE_STATUS_TEXT}\`\n\nThen use \`/fgen mcfa\``)
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (name === 'fgen' || name === 'pgen') {
+        const member = interaction.member;
+        const hasFree = member.roles.cache.has(FREE_GEN_ROLE_ID);
+        const hasPaid = member.roles.cache.has(PAID_GEN_ROLE_ID);
+        const isStaffUser = isStaff(member);
+        if (name === 'pgen' && !interaction.options.getString('product')) {
+          return interaction.reply({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0xfee75c)
+                .setTitle('Paid Gen')
+                .setDescription(`**Price:** $3 USD\nOpen a ticket → pay → get paid role → \`/pgen mcfa\``)
+            ],
+            ephemeral: true
+          });
+        }
+        if (!hasFree && !hasPaid && !isStaffUser) {
+          return interaction.reply({ content: 'No gen access. Free status or paid role required.', ephemeral: true });
+        }
+        const product = resolveProductKey(interaction.options.getString('product') || 'mcfa') || 'mcfa';
+        const meta = PRODUCT_STOCKS[product];
+        if (!meta) return interaction.reply({ content: 'Unknown product.', ephemeral: true });
+        const taken = await takeFromStock(product, 1, 'gen');
+        if (!taken) return interaction.reply({ content: `**${meta.label}** gen stock empty.`, ephemeral: true });
+        try {
+          await interaction.user.send(`**${meta.label}**\n\`\`\`\n${taken[0]}\n\`\`\``);
+        } catch (_) {
+          const arr = getStock(product, 'gen');
+          arr.unshift(taken[0]);
+          setStock(product, arr, 'gen');
+          saveData();
+          return interaction.reply({ content: 'Could not DM you — open DMs and try again. Stock restored.', ephemeral: true });
+        }
+        return interaction.reply({ content: `✅ **${meta.label}** sent to your DMs.`, ephemeral: true });
+      }
+
+      if (name === 'pay') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        const user = interaction.options.getUser('user');
+        const productKey = resolveProductKey(interaction.options.getString('product') || 'mcfa') || 'mcfa';
+        const amount = Math.min(50, Math.max(1, interaction.options.getInteger('amount') || 1));
+        const meta = PRODUCT_STOCKS[productKey];
+        if (!meta || meta.type === 'method') {
+          const text = getMethodText(productKey);
+          if (!text) return interaction.reply({ content: 'Product empty / unknown.', ephemeral: true });
+          try {
+            await user.send(`**${meta.label}**\n${text}`);
+          } catch (_) {
+            return interaction.reply({ content: 'Could not DM user.', ephemeral: true });
+          }
+          return interaction.reply({ content: `Sent method **${meta.label}** to **${user.tag}**.` });
+        }
+        const taken = await takeFromStock(productKey, amount, 'normal');
+        if (!taken || !taken.length) return interaction.reply({ content: 'Stock empty.', ephemeral: true });
+        try {
+          await user.send(`**${meta.label}** ×${taken.length}\n\`\`\`\n${taken.join('\n')}\n\`\`\``);
+        } catch (_) {
+          const arr = getStock(productKey);
+          arr.unshift(...taken);
+          setStock(productKey, arr);
+          saveData();
+          return interaction.reply({ content: 'Could not DM user. Stock restored.', ephemeral: true });
+        }
+        return interaction.reply({ content: `Paid **${user.tag}** **${taken.length}× ${meta.label}**.` });
+      }
+
+      if (name === 'claim') {
+        return interaction.reply({
+          content: 'Use `$claim` inside your reward **ticket** channel for the full claim flow.',
+          ephemeral: true
+        });
+      }
+
+      if (name === 'staff') {
+        const action = interaction.options.getString('action');
+        if (action === 'open' || action === 'close') {
+          if (!isCoOwnerOrAbove(interaction.member)) {
+            return interaction.reply({ content: 'Owner / Co-Owner only.', ephemeral: true });
+          }
+          data.staffApplyOpen = action === 'open';
+          saveData();
+          return interaction.reply({ content: `Staff applications **${action === 'open' ? 'OPEN' : 'CLOSED'}**.` });
+        }
+        if (!data.staffApplyOpen) {
+          return interaction.reply({ content: 'Staff applications are closed.', ephemeral: true });
+        }
+        return interaction.reply({
+          content: `To apply, open a ticket and use \`$staff apply\` (full form in Discord).`,
+          ephemeral: true
+        });
+      }
+
+      if (name === 'format') {
+        const account = interaction.options.getString('account') || '';
+        const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+:.+$/.test(account);
+        return interaction.reply({
+          content: ok ? '✅ Looks like a valid `email:pass` format.' : '❌ Invalid format. Use `email:pass`.',
+          ephemeral: true
+        });
+      }
+
+      if (name === 'salary') {
+        if (!isCoOwnerOrAbove(interaction.member) && interaction.user.id !== BIRTHDAY_USER_ID) {
+          return interaction.reply({ content: 'Restricted.', ephemeral: true });
+        }
+        const user = interaction.options.getUser('user');
+        const amount = Math.min(10, Math.max(1, interaction.options.getInteger('amount') || 1));
+        const taken = await takeFromStock('mcfa', amount, 'normal');
+        if (!taken || !taken.length) return interaction.reply({ content: 'MCFA stock empty.', ephemeral: true });
+        try {
+          await user.send(`**Staff Salary**\n\`\`\`\n${taken.join('\n')}\n\`\`\``);
+        } catch (_) {
+          const arr = getStock('mcfa');
+          arr.unshift(...taken);
+          setStock('mcfa', arr);
+          saveData();
+          return interaction.reply({ content: 'Could not DM user.', ephemeral: true });
+        }
+        return interaction.reply({ content: `Salary sent to **${user.tag}** (${taken.length} MCFA).` });
+      }
+
+      if (name === 'close' || name === 'leave') {
+        return interaction.reply({
+          content: `Use \`$${name}\` inside a TeamUp channel for this action.`,
+          ephemeral: true
+        });
+      }
+
+      if (name === 'teamup') {
+        return interaction.reply({
+          content: 'Use `$teamup @user1 @user2 …` in Discord to create a TeamUp channel (needs category setup).',
+          ephemeral: true
+        });
+      }
+
+      if (name === 'daily') {
+        if (!isHeadAdminOrAbove(interaction.member)) {
+          return interaction.reply({ content: 'Head Admin+ only.', ephemeral: true });
+        }
+        const mode = interaction.options.getString('mode');
+        const user = interaction.options.getUser('user');
+        if (mode === 'pay' && user) {
+          return interaction.reply({
+            content: `Run \`$daily pay @${user.username}\` in a server channel for the full spin flow.`,
+            ephemeral: true
+          });
+        }
+        return interaction.reply({ content: 'Usage: `/daily mode:pay user:@someone` or `$daily @role N`', ephemeral: true });
+      }
+
     }
   } catch (e) {
     console.error('interaction', e);
