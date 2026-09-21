@@ -14,12 +14,19 @@ const {
   ComponentType,
   ChannelType,
   PermissionsBitField,
-  AttachmentBuilder
+  AttachmentBuilder,
+  SlashCommandBuilder,
+  REST,
+  Routes
 } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
 const PREFIX = process.env.PREFIX || '$';
+const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID || '1540362727581818947';
+const FLARE_GUILD_ID = process.env.GUILD_ID || process.env.FLARE_GUILD_ID || '1540362727514701894';
+const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
+
 const PORT = process.env.PORT || 3000;
 
 // Staff role hierarchy for $staffstats (highest first)
@@ -47,6 +54,7 @@ const PRODUCT_STOCKS = {
   nitro: { label: 'NITRO', emoji: '💜', cmd: ['nitro'], type: 'stock' },
   netflix: { label: 'NETFLIX', emoji: '🎬', cmd: ['netflix'], type: 'stock' },
   crunchyroll: { label: 'CRUNCHYROLL', emoji: '🍥', cmd: ['crunchyroll', 'cruncyroll', 'cr'], type: 'stock' },
+  steam: { label: 'STEAM', emoji: '🎮', cmd: ['steam'], type: 'stock' },
   // new = full methods (unlimited same text)
   mcredeem: { label: 'McRedeem Code', emoji: '🎟️', cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
   mccode: { label: 'McCode Method', emoji: '📜', cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
@@ -75,33 +83,48 @@ const STAFF_APPLY_PING_ROLES = [OWNER_ROLE_ID, CO_OWNER_ROLE_ID].filter(Boolean)
 
 function ensureStocks(d) {
   if (!d.stocks || typeof d.stocks !== 'object') d.stocks = {};
+  if (!d.genStocks || typeof d.genStocks !== 'object') d.genStocks = {};
+  if (!d.methods || typeof d.methods !== 'object') d.methods = {};
   for (const key of Object.keys(PRODUCT_STOCKS)) {
-    if (!Array.isArray(d.stocks[key])) d.stocks[key] = [];
+    if (PRODUCT_STOCKS[key].type === 'method') {
+      if (typeof d.methods[key] !== 'string') d.methods[key] = '';
+    } else {
+      if (!Array.isArray(d.stocks[key])) d.stocks[key] = [];
+      if (!Array.isArray(d.genStocks[key])) d.genStocks[key] = [];
+    }
   }
   // migrate legacy
   if (Array.isArray(d.mcfaStock) && d.mcfaStock.length && d.stocks.mcfa.length === 0) {
     d.stocks.mcfa = d.mcfaStock.slice();
   }
-  if (Array.isArray(d.customStock) && d.customStock.length && d.stocks.custom.length === 0) {
+  if (Array.isArray(d.customStock) && d.customStock.length && (!d.stocks.custom || !d.stocks.custom.length)) {
     d.stocks.custom = d.customStock.slice();
   }
-  d.mcfaStock = d.stocks.mcfa;
-  d.customStock = d.stocks.custom;
-  if (!d.staffApplyOpen) d.staffApplyOpen = true;
+  d.mcfaStock = d.stocks.mcfa || [];
+  d.customStock = d.stocks.custom || [];
+  if (d.staffApplyOpen == null) d.staffApplyOpen = true;
   if (!d.staffApplications) d.staffApplications = {};
+      if (!d.giveaways) d.giveaways = {};
+      if (!d.warnings) d.warnings = {};
   return d;
 }
 
-function getStock(key) {
+/** pool: 'normal' (pay/claim) or 'gen' (fgen/pgen) */
+function getStock(key, pool = 'normal') {
   ensureStocks(data);
+  if (pool === 'gen') return data.genStocks[key] || [];
   return data.stocks[key] || [];
 }
 
-function setStock(key, arr) {
+function setStock(key, arr, pool = 'normal') {
   ensureStocks(data);
-  data.stocks[key] = arr;
-  if (key === 'mcfa') data.mcfaStock = arr;
-  if (key === 'custom') data.customStock = arr;
+  if (pool === 'gen') {
+    data.genStocks[key] = arr;
+  } else {
+    data.stocks[key] = arr;
+    if (key === 'mcfa') data.mcfaStock = arr;
+    if (key === 'custom') data.customStock = arr;
+  }
 }
 
 function resolveProductKey(name) {
@@ -147,12 +170,218 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+
+const OAUTH_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
+const OAUTH_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
+const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || 'https://flare-staff-bot.onrender.com/auth/callback';
+const dashSessions = new Map();
+
+function getCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('=') || '');
+  }
+  return '';
+}
+function publicBase(req) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  return `${proto}://${host}`;
+}
+function redirectUri(req) {
+  return OAUTH_REDIRECT_URI || `${publicBase(req)}/auth/callback`;
+}
+async function memberCanAccessDashboard(userId) {
+  try {
+    const guild = client.guilds.cache.get(FLARE_GUILD_ID) || await client.guilds.fetch(FLARE_GUILD_ID).catch(() => null);
+    if (!guild) return false;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) return false;
+    if (isStaff(member) || canViewStock(member)) return true;
+    if (guild.ownerId === userId) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 http
-  .createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Flare Staff Bot is online');
+  .createServer(async (req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const pathName = url.pathname;
+    const json = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    };
+    const parseBody = async () => {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { return {}; }
+    };
+    try {
+      if (pathName === '/' || pathName === '/dashboard') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'));
+        return;
+      }
+      if (pathName === '/styles.css') {
+        res.writeHead(200, { 'Content-Type': 'text/css' });
+        res.end(fs.readFileSync(path.join(__dirname, 'public', 'styles.css'), 'utf8'));
+        return;
+      }
+      if (pathName === '/app.js') {
+        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        res.end(fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8'));
+        return;
+      }
+      if (pathName === '/logo.png' || pathName === '/bg-desktop.jpg' || pathName === '/bg-mobile.jpg') {
+        const f = path.join(__dirname, 'public', pathName.slice(1));
+        const type = pathName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+        res.writeHead(200, { 'Content-Type': type });
+        res.end(fs.readFileSync(f));
+        return;
+      }
+      if (pathName === '/auth/login') {
+        if (!OAUTH_CLIENT_ID) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Set DISCORD_CLIENT_ID + DISCORD_CLIENT_SECRET + OAUTH_REDIRECT_URI');
+          return;
+        }
+        const q = new URLSearchParams({
+          client_id: OAUTH_CLIENT_ID,
+          response_type: 'code',
+          scope: 'identify guilds',
+          redirect_uri: redirectUri(req),
+          prompt: 'none'
+        });
+        res.writeHead(302, { Location: `https://discord.com/api/oauth2/authorize?${q}` });
+        res.end();
+        return;
+      }
+      if (pathName === '/auth/callback') {
+        const code = url.searchParams.get('code');
+        if (!code) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Missing code');
+          return;
+        }
+        const body = new URLSearchParams({
+          client_id: OAUTH_CLIENT_ID,
+          client_secret: OAUTH_CLIENT_SECRET,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri(req)
+        });
+        const tok = await fetch('https://discord.com/api/oauth2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body
+        }).then((r) => r.json());
+        if (!tok.access_token) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('OAuth failed: ' + (tok.error || 'token'));
+          return;
+        }
+        const user = await fetch('https://discord.com/api/users/@me', {
+          headers: { Authorization: `Bearer ${tok.access_token}` }
+        }).then((r) => r.json());
+        const ok = await memberCanAccessDashboard(user.id);
+        if (!ok) {
+          res.writeHead(403, { 'Content-Type': 'text/html' });
+          res.end('<h1>Access denied</h1><p>Join Flare Rewards and have Member/Staff role.</p>');
+          return;
+        }
+        dashSessions.set(user.id, { tag: `${user.username}`, at: Date.now() });
+        res.writeHead(302, {
+          Location: '/',
+          'Set-Cookie': `flare_uid=${encodeURIComponent(user.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`
+        });
+        res.end();
+        return;
+      }
+      if (pathName === '/auth/logout') {
+        res.writeHead(302, { Location: '/', 'Set-Cookie': 'flare_uid=; Path=/; Max-Age=0' });
+        res.end();
+        return;
+      }
+      const uid = getCookie(req, 'flare_uid');
+      const authed = uid && dashSessions.has(uid) && (await memberCanAccessDashboard(uid));
+      if (pathName === '/api/status') {
+        return json(200, {
+          online: !!client.user,
+          tag: client.user?.tag,
+          authed: !!authed,
+          userId: authed ? uid : null,
+          userTag: authed ? dashSessions.get(uid)?.tag : null,
+          error: !OAUTH_CLIENT_ID ? 'Missing OAuth env' : !authed && uid ? 'Not staff/member on Flare server' : undefined
+        });
+      }
+      if (!authed && pathName.startsWith('/api/')) return json(401, { error: 'Login required' });
+      if (pathName === '/api/stock') {
+        ensureStocks(data);
+        const pay = {}, gen = {};
+        for (const key of Object.keys(PRODUCT_STOCKS)) {
+          if (PRODUCT_STOCKS[key].type === 'method') {
+            pay[key] = getMethodText(key) ? '∞' : 0;
+            gen[key] = pay[key];
+          } else {
+            pay[key] = getStock(key).length;
+            gen[key] = getStock(key, 'gen').length;
+          }
+        }
+        return json(200, { pay, gen });
+      }
+      if (pathName === '/api/genadd' && req.method === 'POST') {
+        const body = await parseBody();
+        const product = resolveProductKey(body.product);
+        if (!product || PRODUCT_STOCKS[product]?.type === 'method') return json(400, { error: 'Bad product' });
+        const lines = String(body.lines || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const arr = getStock(product, 'gen');
+        let added = 0;
+        for (const a of lines) {
+          if (!arr.includes(a)) { arr.push(a); added++; }
+        }
+        setStock(product, arr, 'gen');
+        saveData();
+        return json(200, { added, total: arr.length });
+      }
+      if (pathName === '/api/export' && req.method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Disposition': 'attachment; filename="flare-full-export.json"'
+        });
+        res.end(JSON.stringify(data, null, 2));
+        return;
+      }
+      if (pathName === '/api/import' && req.method === 'POST') {
+        const body = await parseBody();
+        if (!body || typeof body !== 'object') return json(400, { error: 'Invalid JSON' });
+        // merge full export into live data
+        for (const k of Object.keys(body)) {
+          data[k] = body[k];
+        }
+        ensureStocks(data);
+        saveData();
+        return json(200, { ok: true, keys: Object.keys(body).length });
+      }
+      if (pathName === '/api/economy' && req.method === 'POST') {
+        const body = await parseBody();
+        if (!data.coins) data.coins = {};
+        data.coins[body.userId] = Math.max(0, parseInt(body.coins, 10) || 0);
+        saveData();
+        return json(200, { ok: true });
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('Flare Staff Bot online');
+    } catch (e) {
+      console.error('http', e);
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('error');
+    }
   })
-  .listen(PORT, '0.0.0.0', () => console.log(`HTTP health server on port ${PORT}`));
+  .listen(PORT, '0.0.0.0', () => console.log(`Flare dashboard + bot on port ${PORT}`));
+
 
 function loadData() {
   try {
@@ -174,6 +403,8 @@ function loadData() {
       ensureStocks(d);
       if (typeof d.staffApplyOpen !== 'boolean') d.staffApplyOpen = true;
       if (!d.staffApplications) d.staffApplications = {};
+      if (!d.giveaways) d.giveaways = {};
+      if (!d.warnings) d.warnings = {};
       if (!d.falconInvites) d.falconInvites = {};
       return d;
     }
@@ -239,6 +470,13 @@ function isStaff(member) {
   if (STAFF_ROLE_ID && member.roles.cache.has(STAFF_ROLE_ID)) return true;
   if (member.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
   if (member.permissions.has(PermissionFlagsBits.ManageMessages)) return true;
+  return false;
+}
+
+function canViewStock(member) {
+  if (!member) return false;
+  if (isStaff(member)) return true;
+  if (MEMBER_ROLE_ID && member.roles.cache.has(MEMBER_ROLE_ID)) return true;
   return false;
 }
 
@@ -624,6 +862,43 @@ async function cacheGuildInvites(guild) {
 }
 
 async function onReady() {
+  cleanupClosedTickets();
+  setInterval(cleanupClosedTickets, 10 * 60 * 1000);
+  try {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const cmds = [
+      new SlashCommandBuilder().setName('gstart').setDescription('Start giveaway')
+        .addStringOption(o => o.setName('time').setDescription('10m / 1h / 1d').setRequired(true))
+        .addIntegerOption(o => o.setName('winners').setDescription('Number of winners').setRequired(true))
+        .addStringOption(o => o.setName('prize').setDescription('Prize').setRequired(true)),
+      new SlashCommandBuilder().setName('greroll').setDescription('Reroll giveaway')
+        .addStringOption(o => o.setName('message_id').setDescription('Giveaway message id').setRequired(true)),
+      new SlashCommandBuilder().setName('stock').setDescription('View pay + gen stock'),
+      new SlashCommandBuilder().setName('genstock').setDescription('View gen stock'),
+      new SlashCommandBuilder().setName('ban').setDescription('Ban a member')
+        .addUserOption(o => o.setName('user').setDescription('User to ban').setRequired(true))
+        .addStringOption(o => o.setName('reason').setDescription('Reason')),
+      new SlashCommandBuilder().setName('kick').setDescription('Kick a member')
+        .addUserOption(o => o.setName('user').setDescription('User to kick').setRequired(true))
+        .addStringOption(o => o.setName('reason').setDescription('Reason')),
+      new SlashCommandBuilder().setName('timeout').setDescription('Timeout (mute) a member')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addStringOption(o => o.setName('duration').setDescription('10m / 1h / 1d').setRequired(true))
+        .addStringOption(o => o.setName('reason').setDescription('Reason')),
+      new SlashCommandBuilder().setName('untimeout').setDescription('Remove timeout')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+      new SlashCommandBuilder().setName('warn').setDescription('Warn a member')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(true)),
+      new SlashCommandBuilder().setName('warnings').setDescription('List warnings for a user')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+    ].map(c => c.toJSON());
+    await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
+    console.log('Slash: /gstart /greroll /stock /genstock /ban /kick /timeout /warn');
+  } catch (e) {
+    console.error('slash register', e.message);
+  }
+
   console.log(`Logged in as ${client.user.tag}`);
   for (const [, guild] of client.guilds.cache) {
     await cacheGuildInvites(guild);
@@ -632,6 +907,24 @@ async function onReady() {
 }
 
 client.once('ready', onReady);
+
+async function cleanupClosedTickets() {
+  try {
+    for (const [, guild] of client.guilds.cache) {
+      for (const [, ch] of guild.channels.cache) {
+        if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildAnnouncement) continue;
+        const n = (ch.name || '').toLowerCase();
+        // closed ticket channels
+        if (n.startsWith('closed-') || n.includes('ticket-closed') || n.startsWith('closed│') || n.startsWith('closed|')) {
+          await ch.delete('Auto-delete closed ticket').catch(() => {});
+        }
+      }
+    }
+  } catch (e) {
+    console.error('ticket cleanup', e.message);
+  }
+}
+
 client.once('clientReady', onReady);
 
 client.on('inviteCreate', async (invite) => {
@@ -887,17 +1180,50 @@ async function sendLongSpoiler(target, title, text) {
     part++;
   }
 }
-async function takeFromStock(productKey, amount) {
+
+function parseDuration(str) {
+  const m = String(str).trim().match(/^(\d+)(s|m|h|d)$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const u = m[2].toLowerCase();
+  return n * ({ s: 1000, m: 60000, h: 3600000, d: 86400000 }[u] || 0);
+}
+async function endGiveaway(messageId, reroll = false) {
+  const g = data.giveaways?.[messageId];
+  if (!g) return;
+  const ch = await client.channels.fetch(g.channelId).catch(() => null);
+  if (!ch) return;
+  const entries = [...new Set(g.entries || [])];
+  const winners = [];
+  const pool = entries.slice();
+  const count = Math.min(g.winners || 1, pool.length);
+  for (let i = 0; i < count; i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    winners.push(pool.splice(idx, 1)[0]);
+  }
+  const text = winners.length
+    ? `🎉 **Giveaway ended!** Prize: **${g.prize}**\nWinners: ${winners.map((id) => `<@${id}>`).join(', ')}`
+    : `🎉 **Giveaway ended!** No valid entries for **${g.prize}**.`;
+  await ch.send(text).catch(() => {});
+  if (!reroll) {
+    try {
+      const msg = await ch.messages.fetch(messageId);
+      await msg.edit({ components: [] }).catch(() => {});
+    } catch (_) {}
+  }
+}
+
+async function takeFromStock(productKey, amount, pool = 'normal') {
   ensureStocks(data);
   if (isMethodProduct(productKey)) {
     const text = getMethodText(productKey);
     if (!text) return null;
     return Array.from({ length: amount || 1 }, () => text);
   }
-  const arr = data.stocks[productKey] || [];
+  const arr = getStock(productKey, pool).slice();
   if (arr.length < amount) return null;
   const taken = arr.splice(0, amount);
-  setStock(productKey, arr);
+  setStock(productKey, arr, pool);
   saveData();
   return taken;
 }
@@ -1156,7 +1482,7 @@ client.on('messageCreate', async (message) => {
   // $mcfa add ...      → add accounts (staff)
   // $stock ...         → same aliases
   if (cmd === 'stock') {
-    if (!isStaff(message.member)) return message.reply('Staff only.');
+    if (!canViewStock(message.member)) return message.reply('Members / staff only.');
     const sub = (args[0] || '').toLowerCase();
     if (!sub || sub === 'list' || sub === 'status') {
       return message.reply({ embeds: [buildStockListEmbed()] });
@@ -3224,6 +3550,213 @@ ${message.author}'s **staff application is ready** — please review.`
     });
   }
 
+
+
+
+  // ========== Moderation $ban $kick $timeout $warn ==========
+  if (['ban', 'kick', 'timeout', 'mute', 'untimeout', 'unmute', 'warn', 'warnings'].includes(cmd)) {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const user = message.mentions.users.first();
+    if (!user && cmd !== 'warnings') return message.reply(`\`$${cmd} @user [reason/duration]\``);
+    if (cmd === 'warnings') {
+      const u = user || message.mentions.users.first();
+      if (!u) return message.reply('`$warnings @user`');
+      const list = (data.warnings && data.warnings[u.id]) || [];
+      const text = list.length
+        ? list.map((w, i) => `**${i + 1}.** ${w.reason} — <t:${Math.floor(w.at / 1000)}:R>`).join('\n')
+        : 'No warnings.';
+      return message.reply({ embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle(`Warnings — ${u.tag}`).setDescription(text)] });
+    }
+    const member = await message.guild.members.fetch(user.id).catch(() => null);
+    const reason = args.slice(1).join(' ').replace(/<@!?\d+>/g, '').trim() || 'No reason';
+    if (cmd === 'warn') {
+      if (!data.warnings) data.warnings = {};
+      if (!data.warnings[user.id]) data.warnings[user.id] = [];
+      data.warnings[user.id].push({ reason: args.slice(1).join(' ') || 'No reason', by: message.author.id, at: Date.now() });
+      saveData();
+      await user.send(`⚠️ Warned in **${message.guild.name}**: ${data.warnings[user.id].slice(-1)[0].reason}`).catch(() => {});
+      return message.reply(`Warned **${user.tag}** (${data.warnings[user.id].length} total)`);
+    }
+    if (!member) return message.reply('Member not in server.');
+    if (cmd === 'ban') {
+      await member.ban({ reason: `${reason} | ${message.author.tag}` });
+      return message.reply(`Banned **${user.tag}**`);
+    }
+    if (cmd === 'kick') {
+      await member.kick(`${reason} | ${message.author.tag}`);
+      return message.reply(`Kicked **${user.tag}**`);
+    }
+    if (cmd === 'timeout' || cmd === 'mute') {
+      const dur = args[1] || '1h';
+      const ms = parseDuration(dur);
+      if (!ms) return message.reply('`$timeout @user 1h reason`');
+      await member.timeout(ms, reason);
+      return message.reply(`Timed out **${user.tag}** for **${dur}**`);
+    }
+    if (cmd === 'untimeout' || cmd === 'unmute') {
+      await member.timeout(null);
+      return message.reply(`Timeout removed for **${user.tag}**`);
+    }
+  }
+
+
+  // ========== Giveaways $gstart / $greroll ==========
+  if (cmd === 'gstart' || cmd === 'giveaway') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    // $gstart 1h 1 Nitro
+    const timeRaw = args[0];
+    const winners = parseInt(args[1], 10) || 1;
+    const prize = args.slice(2).join(' ') || 'Prize';
+    if (!timeRaw || !prize) {
+      return message.reply('`$gstart <time> <winners> <prize>` e.g. `$gstart 1h 1 Nitro`');
+    }
+    const ms = parseDuration(timeRaw);
+    if (!ms || ms < 10000) return message.reply('Bad time. Use 10m, 1h, 1d');
+    const ends = Date.now() + ms;
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('gw_join').setLabel('🎉 Join').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('gw_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary)
+    );
+    const emb = new EmbedBuilder()
+      .setColor(0xbe2c71)
+      .setTitle('🎉 GIVEAWAY')
+      .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(ends/1000)}:R>\n\nClick **Join** to enter!`)
+      .setFooter({ text: 'Flare Drop' });
+    const msg = await message.channel.send({ embeds: [emb], components: [row] });
+    if (!data.giveaways) data.giveaways = {};
+    data.giveaways[msg.id] = {
+      channelId: message.channel.id,
+      prize,
+      winners,
+      ends,
+      hostId: message.author.id,
+      entries: []
+    };
+    saveData();
+    setTimeout(() => endGiveaway(msg.id).catch(() => {}), ms);
+    return;
+  }
+  if (cmd === 'greroll') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const id = args[0] || (message.reference && message.reference.messageId);
+    if (!id || !data.giveaways?.[id]) return message.reply('`$greroll <messageId>` (reply to giveaway)');
+    await endGiveaway(id, true);
+    return message.reply('Rerolled.');
+  }
+
+
+  // ========== $genstock / $genadd — separate gen stock ==========
+  if (cmd === 'genstock' || cmd === 'gstock' || cmd === 'g3n') {
+    // $g3n stock | $g3n stock add | $genstock
+    if (cmd === 'g3n') {
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'stock' || sub === 'stocks') {
+        const sub2 = (args[1] || '').toLowerCase();
+        if (sub2 === 'add') {
+          if (!isStaff(message.member)) return message.reply('Staff only.');
+          // reuse genadd: $g3n stock add product items
+          const productKey = resolveProductKey(args[2]);
+          if (!productKey) return message.reply('`$g3n stock add <product> email:pass`');
+          const meta = PRODUCT_STOCKS[productKey];
+          if (meta.type === 'method') {
+            return message.reply(`Method — use \`$${productKey} set <text>\``);
+          }
+          const rest = body.split(/add/i)[1] || '';
+          const afterProd = rest.trim().split(/\s+/);
+          // body after product name
+          let itemsPart = body;
+          const pidx = body.toLowerCase().indexOf(args[2].toLowerCase());
+          itemsPart = pidx >= 0 ? body.slice(pidx + args[2].length).trim() : '';
+          const accounts = parseAccounts(itemsPart).length
+            ? parseAccounts(itemsPart)
+            : itemsPart.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+          if (!accounts.length) return message.reply('`$g3n stock add mcfa email:pass`');
+          const arr = getStock(productKey, 'gen');
+          let added = 0;
+          for (const a of accounts) {
+            if (!arr.includes(a)) { arr.push(a); added++; }
+          }
+          setStock(productKey, arr, 'gen');
+          saveData();
+          return message.reply(`🎁 Gen **${meta.label}** +${added} · now ${arr.length}`);
+        }
+        // view gen stock
+        if (!canViewStock(message.member)) return message.reply('Members / staff only.');
+        cmd = 'genstock';
+        // fall through by jumping - rewrite as call
+      } else {
+        return message.reply('`$g3n stock` · `$g3n stock add <product> <items>`');
+      }
+    }
+    if (cmd === 'genstock' || cmd === 'gstock') {
+    if (!canViewStock(message.member)) return message.reply('Members / staff only.');
+    ensureStocks(data);
+    const lines = Object.entries(PRODUCT_STOCKS)
+      .filter(([, m]) => m.type !== 'method')
+      .map(([key, meta]) => {
+        const g = getStock(key, 'gen').length;
+        return `${meta.emoji} **${meta.label}** gen  |  \`${g}\``;
+      });
+    const methods = Object.entries(PRODUCT_STOCKS)
+      .filter(([, m]) => m.type === 'method')
+      .map(([key, meta]) => {
+        const has = !!getMethodText(key);
+        return `${meta.emoji} **${meta.label}**  |  ${has ? '`∞`' : '`not set`'}`;
+      });
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle('🎁 GEN STOCK (fgen / pgen only)')
+          .setDescription(lines.join('\n') + '\n\n**Methods (shared ∞)**\n' + methods.join('\n'))
+          .setFooter({ text: 'Add: $genadd mcfa email:pass · Pay stock stays separate ($mcfa add)' })
+      ]
+    });
+    }
+  }
+
+  if (cmd === 'genadd' || cmd === 'gadd') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const productKey = resolveProductKey(args[0]);
+    if (!productKey) {
+      return message.reply('Usage: `$genadd <product> <items...>` e.g. `$genadd mcfa a@b.com:pass`');
+    }
+    const meta = PRODUCT_STOCKS[productKey];
+    if (meta.type === 'method') {
+      return message.reply(`**${meta.label}** is a method — use \`$${productKey} set <full text>\` (shared ∞ for pay + gen).`);
+    }
+    const rest = body.slice(body.toLowerCase().indexOf(args[0]) + args[0].length).trim();
+    const accounts = parseAccounts(rest).length
+      ? parseAccounts(rest)
+      : rest.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    if (!accounts.length) {
+      return message.reply(`Usage: \`$genadd ${productKey} email:pass\` (multiple OK)`);
+    }
+    const arr = getStock(productKey, 'gen');
+    let added = 0;
+    for (const a of accounts) {
+      if (!arr.includes(a)) {
+        arr.push(a);
+        added++;
+      }
+    }
+    setStock(productKey, arr, 'gen');
+    saveData();
+    return message.reply(
+      `🎁 Gen stock **${meta.label}**: +**${added}** · now **${arr.length}** (pay stock unchanged)`
+    );
+  }
+
+  if (cmd === 'genclear') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const productKey = resolveProductKey(args[0]);
+    if (!productKey) return message.reply('`$genclear <product>`');
+    const n = getStock(productKey, 'gen').length;
+    setStock(productKey, [], 'gen');
+    saveData();
+    return message.reply(`Cleared **${n}** from **gen** ${productKey}.`);
+  }
+
   // ========== $fgen / $pgen — gen DM (free OR paid role) ==========
   if (cmd === 'fgen' || cmd === 'pgen' || cmd === 'paidgen') {
     const member = message.member;
@@ -3269,17 +3802,20 @@ ${message.author}'s **staff application is ready** — please review.`
     const product = resolveProductKey(args[0] || 'mcfa') || 'mcfa';
     const meta = PRODUCT_STOCKS[product];
     if (!meta) return message.reply('Unknown product. Try: mcfa, xbox, netflix, crunchyroll, …');
-    const taken = await takeFromStock(product, 1);
+    const taken = await takeFromStock(product, 1, 'gen');
     if (!taken) {
-      return message.reply(`**${meta.label}** stock is empty. Try another product or wait for restock.`);
+      return message.reply(
+        `**${meta.label}** **gen** stock is empty.
+Staff: \`$genadd ${product} ...\` or \`$genstock\``
+      );
     }
     const ok = await deliverProductWithVouch(message, message.author, product, taken, true);
     if (!ok) {
-      const arr = getStock(product);
+      const arr = getStock(product, 'gen');
       arr.unshift(taken[0]);
-      setStock(product, arr);
+      setStock(product, arr, 'gen');
       saveData();
-      return message.reply('Could not DM you — open your DMs and try again. Stock restored.');
+      return message.reply('Could not DM you — open your DMs and try again. Gen stock restored.');
     }
     const tier = hasPaid ? 'Paid' : hasFree ? 'Free' : 'Staff';
     return message.reply({
@@ -3593,3 +4129,127 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
 
 client.login(TOKEN);
 
+
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (interaction.isButton()) {
+      const id = interaction.customId;
+      if (id === 'gw_join' || id === 'gw_leave') {
+        const g = data.giveaways?.[interaction.message.id];
+        if (!g) return interaction.reply({ content: 'Giveaway ended.', ephemeral: true });
+        if (!g.entries) g.entries = [];
+        const uid = interaction.user.id;
+        if (id === 'gw_join') {
+          if (!g.entries.includes(uid)) g.entries.push(uid);
+          saveData();
+          return interaction.reply({ content: 'Joined! 🎉', ephemeral: true });
+        }
+        g.entries = g.entries.filter((x) => x !== uid);
+        saveData();
+        return interaction.reply({ content: 'Left giveaway.', ephemeral: true });
+      }
+    }
+    if (interaction.isChatInputCommand()) {
+      const name = interaction.commandName;
+      if (name === 'gstart') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        }
+        const timeRaw = interaction.options.getString('time');
+        const winners = interaction.options.getInteger('winners') || 1;
+        const prize = interaction.options.getString('prize');
+        const ms = parseDuration(timeRaw);
+        if (!ms) return interaction.reply({ content: 'Bad time', ephemeral: true });
+        const ends = Date.now() + ms;
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('gw_join').setLabel('🎉 Join').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('gw_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary)
+        );
+        const emb = new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setTitle('🎉 GIVEAWAY')
+          .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(ends/1000)}:R>`);
+        await interaction.reply({ embeds: [emb], components: [row] });
+        const msg = await interaction.fetchReply();
+        if (!data.giveaways) data.giveaways = {};
+        data.giveaways[msg.id] = { channelId: interaction.channelId, prize, winners, ends, hostId: interaction.user.id, entries: [] };
+        saveData();
+        setTimeout(() => endGiveaway(msg.id).catch(() => {}), ms);
+        return;
+      }
+      if (name === 'greroll') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        const mid = interaction.options.getString('message_id');
+        await endGiveaway(mid, true);
+        return interaction.reply({ content: 'Rerolled.', ephemeral: true });
+      }
+
+      if (name === 'ban' || name === 'kick' || name === 'timeout' || name === 'untimeout' || name === 'warn' || name === 'warnings') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        }
+        const user = interaction.options.getUser('user');
+        const reason = interaction.options.getString('reason') || 'No reason';
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+        if (name === 'warnings') {
+          const list = (data.warnings && data.warnings[user.id]) || [];
+          const text = list.length
+            ? list.map((w, i) => `**${i + 1}.** ${w.reason} — <t:${Math.floor(w.at / 1000)}:R> by <@${w.by}>`).join('\n')
+            : 'No warnings.';
+          return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle(`Warnings — ${user.tag}`).setDescription(text)], ephemeral: true });
+        }
+        if (name === 'warn') {
+          if (!data.warnings) data.warnings = {};
+          if (!data.warnings[user.id]) data.warnings[user.id] = [];
+          data.warnings[user.id].push({ reason, by: interaction.user.id, at: Date.now() });
+          saveData();
+          await user.send(`⚠️ You were warned in **${interaction.guild.name}**\nReason: ${reason}`).catch(() => {});
+          return interaction.reply({ content: `Warned **${user.tag}** — ${reason} (${data.warnings[user.id].length} total)`, ephemeral: false });
+        }
+        if (!member) return interaction.reply({ content: 'Member not found in server.', ephemeral: true });
+        if (name === 'ban') {
+          await member.ban({ reason: `${reason} | by ${interaction.user.tag}` });
+          return interaction.reply({ content: `Banned **${user.tag}** — ${reason}` });
+        }
+        if (name === 'kick') {
+          await member.kick(`${reason} | by ${interaction.user.tag}`);
+          return interaction.reply({ content: `Kicked **${user.tag}** — ${reason}` });
+        }
+        if (name === 'timeout') {
+          const dur = interaction.options.getString('duration');
+          const ms = parseDuration(dur);
+          if (!ms || ms > 28 * 86400000) return interaction.reply({ content: 'Duration: 10m / 1h / 1d (max 28d)', ephemeral: true });
+          await member.timeout(ms, `${reason} | by ${interaction.user.tag}`);
+          return interaction.reply({ content: `Timed out **${user.tag}** for **${dur}** — ${reason}` });
+        }
+        if (name === 'untimeout') {
+          await member.timeout(null, `Removed by ${interaction.user.tag}`);
+          return interaction.reply({ content: `Timeout removed for **${user.tag}**` });
+        }
+      }
+
+      if (name === 'stock' || name === 'genstock') {
+        if (!canViewStock(interaction.member)) {
+          return interaction.reply({ content: 'Members / staff only.', ephemeral: true });
+        }
+        ensureStocks(data);
+        const pool = name === 'genstock' ? 'gen' : 'normal';
+        const lines = Object.entries(PRODUCT_STOCKS).map(([key, meta]) => {
+          if (meta.type === 'method') {
+            const has = !!getMethodText(key);
+            return `${meta.emoji} **${meta.label}** | ${has ? '∞' : 'not set'}`;
+          }
+          if (pool === 'gen') return `${meta.emoji} **${meta.label}** gen \`${getStock(key,'gen').length}\``;
+          return `${meta.emoji} **${meta.label}** pay \`${getStock(key).length}\` · gen \`${getStock(key,'gen').length}\``;
+        });
+        return interaction.reply({
+          embeds: [new EmbedBuilder().setColor(0xbe2c71).setTitle(name === 'genstock' ? 'Gen stock' : 'Stock').setDescription(lines.join('\n'))],
+          ephemeral: true
+        });
+      }
+    }
+  } catch (e) {
+    console.error('interaction', e);
+  }
+});
