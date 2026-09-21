@@ -1,72 +1,362 @@
-async function api(path, opts={}) {
-  const r = await fetch(path, { credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts });
-  const j = await r.json().catch(()=>({}));
-  if (r.status===401) { document.getElementById('gate').classList.remove('hidden'); document.getElementById('app').classList.add('hidden'); document.getElementById('gateErr').textContent=j.error||'Login'; throw new Error('auth'); }
-  if (!r.ok) throw new Error(j.error||r.statusText);
+async function api(path, opts) {
+  opts = opts || {};
+  var headers = { 'Content-Type': 'application/json' };
+  if (opts.headers) {
+    for (var k in opts.headers) headers[k] = opts.headers[k];
+  }
+  var r = await fetch(path, {
+    credentials: 'same-origin',
+    headers: headers,
+    method: opts.method || 'GET',
+    body: opts.body
+  });
+  var j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (r.status === 401) {
+    document.getElementById('gate').classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('gateErr').textContent = j.error || 'Login required';
+    throw new Error('auth');
+  }
+  if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-function tab(name){
-  document.querySelectorAll('[id^=tab-]').forEach(e=>e.classList.add('hidden'));
-  document.getElementById('tab-'+name)?.classList.remove('hidden');
-  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
-async function boot(){
-  const s = await api('/api/status');
-  if (!s.authed) { document.getElementById('gateErr').textContent = s.error||''; return; }
+
+function tab(name) {
+  document.querySelectorAll('.panel').forEach(function (e) {
+    e.classList.add('hidden');
+  });
+  var panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.remove('hidden');
+  document.querySelectorAll('.nav-item').forEach(function (b) {
+    b.classList.toggle('active', b.getAttribute('data-tab') === name);
+  });
+  closeMenu();
+  if (name === 'overview') loadOverview();
+  if (name === 'stock' || name === 'gen') refreshStock();
+  if (name === 'methods') loadMethods();
+  if (name === 'giveaways') loadGiveaways();
+  if (name === 'warnings') loadWarnings();
+}
+
+function openMenu() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('scrim').classList.remove('hidden');
+}
+function closeMenu() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('scrim').classList.add('hidden');
+}
+
+async function boot() {
+  var s = await api('/api/status');
+  if (!s.authed) {
+    document.getElementById('gateErr').textContent = s.error || '';
+    return;
+  }
   document.getElementById('gate').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
-  document.getElementById('me').textContent = (s.userTag||s.userId)+' · '+(s.online?'bot online':'bot…');
-  await refreshStock();
+  var label = (s.userTag || s.userId) + ' · ' + (s.online ? 'bot online' : 'bot…');
+  document.getElementById('sideUser').textContent = s.userTag || s.userId || '—';
+  document.getElementById('topStatus').textContent = label;
+  await loadOverview();
 }
-async function refreshStock(){
-  const j = await api('/api/stock');
-  document.getElementById('stockOut').innerHTML = Object.entries(j.pay||{}).map(([k,v])=>`<div><b>${k}</b> pay ${v}</div>`).join('')||'Empty';
-  document.getElementById('genOut').innerHTML = Object.entries(j.gen||{}).map(([k,v])=>`<div><b>${k}</b> gen ${v}</div>`).join('')||'Empty';
-}
-document.getElementById('nav').onclick = e=>{ const b=e.target.closest('button[data-tab]'); if(b) tab(b.dataset.tab); };
-document.getElementById('btnStock').onclick = ()=>refreshStock();
-document.getElementById('btnGenAdd').onclick = async ()=>{
-  try {
-    const j = await api('/api/genadd',{method:'POST',body:JSON.stringify({product:document.getElementById('genProd').value,lines:document.getElementById('genLines').value})});
-    document.getElementById('genMsg').innerHTML='<span class="ok">+'+j.added+'</span>';
-    document.getElementById('genLines').value='';
-    refreshStock();
-  } catch(e){ document.getElementById('genMsg').textContent=e.message; }
-};
-document.getElementById('btnEco').onclick = async ()=>{
-  try {
-    await api('/api/economy',{method:'POST',body:JSON.stringify({userId:document.getElementById('ecoUser').value.trim(),coins:Number(document.getElementById('ecoCoins').value||0)})});
-    document.getElementById('ecoMsg').innerHTML='<span class="ok">Saved</span>';
-  } catch(e){ document.getElementById('ecoMsg').textContent=e.message; }
-};
-document.getElementById('btnBlur').onclick = ()=>{
-  document.documentElement.style.setProperty('--blur', (document.getElementById('blur').value||1)+'px');
-};
-boot().catch(()=>{});
 
-document.getElementById('btnExport').onclick = async () => {
-  const r = await fetch('/api/export', { credentials: 'same-origin' });
+async function loadOverview() {
+  var j = await api('/api/overview');
+  var el = document.getElementById('overviewStats');
+  var items = [
+    ['Pay items', j.payTotal != null ? j.payTotal : 0],
+    ['Gen items', j.genTotal != null ? j.genTotal : 0],
+    ['Methods set', j.methodsSet != null ? j.methodsSet : 0],
+    ['Active GWs', j.giveaways != null ? j.giveaways : 0],
+    ['Warned users', j.warnUsers != null ? j.warnUsers : 0],
+    ['Coin users', j.coinUsers != null ? j.coinUsers : 0]
+  ];
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    html +=
+      '<div class="stat"><div class="label">' +
+      escapeHtml(items[i][0]) +
+      '</div><div class="value">' +
+      escapeHtml(items[i][1]) +
+      '</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+async function refreshStock() {
+  var j = await api('/api/stock');
+  var pay = j.pay || {};
+  var gen = j.gen || {};
+  var payHtml = '';
+  var keys = Object.keys(pay);
+  if (!keys.length) payHtml = '<p class="muted">Empty</p>';
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    payHtml +=
+      '<div class="stock-card"><b>' +
+      escapeHtml(k) +
+      '</b><div class="n">' +
+      escapeHtml(pay[k]) +
+      '</div></div>';
+  }
+  document.getElementById('stockOut').innerHTML = payHtml;
+
+  var genHtml = '';
+  var gkeys = Object.keys(gen);
+  if (!gkeys.length) genHtml = '<p class="muted">Empty</p>';
+  for (var g = 0; g < gkeys.length; g++) {
+    var gk = gkeys[g];
+    genHtml +=
+      '<div class="stock-card"><b>' +
+      escapeHtml(gk) +
+      '</b><div class="n">' +
+      escapeHtml(gen[gk]) +
+      '</div></div>';
+  }
+  document.getElementById('genOut').innerHTML = genHtml;
+}
+
+async function loadMethods() {
+  var j = await api('/api/methods');
+  var methods = j.methods || {};
+  var keys = Object.keys(methods);
+  var box = document.getElementById('methodsOut');
+  if (!keys.length) {
+    box.innerHTML = '<p class="muted">No method products.</p>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var val = methods[key] || '';
+    html +=
+      '<div class="card method-row" data-key="' +
+      escapeHtml(key) +
+      '">' +
+      '<strong>' +
+      escapeHtml(key) +
+      '</strong>' +
+      '<textarea rows="3" id="m-' +
+      escapeHtml(key) +
+      '" placeholder="Method text…">' +
+      escapeHtml(val) +
+      '</textarea>' +
+      '<div class="actions">' +
+      '<button type="button" class="btn primary btn-save-m" data-key="' +
+      escapeHtml(key) +
+      '">Save</button>' +
+      '<button type="button" class="btn ghost btn-clear-m" data-key="' +
+      escapeHtml(key) +
+      '">Clear</button>' +
+      '</div>' +
+      '<p class="msg" id="mm-' +
+      escapeHtml(key) +
+      '"></p>' +
+      '</div>';
+  }
+  box.innerHTML = html;
+}
+
+async function loadGiveaways() {
+  var j = await api('/api/giveaways');
+  var list = j.giveaways || [];
+  var el = document.getElementById('gwOut');
+  if (!list.length) {
+    el.innerHTML = '<p class="muted">No active / stored giveaways.</p>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < list.length; i++) {
+    var g = list[i];
+    var ends = g.ends ? new Date(g.ends).toLocaleString() : '—';
+    var entries = (g.entries || []).length;
+    html +=
+      '<div class="list-item">' +
+      '<strong>' +
+      escapeHtml(g.prize || 'Giveaway') +
+      '</strong>' +
+      '<div class="meta">Winners: ' +
+      escapeHtml(g.winners != null ? g.winners : '?') +
+      ' · Entries: ' +
+      entries +
+      ' · Ends: ' +
+      escapeHtml(ends) +
+      '</div>' +
+      '<div class="meta">ID: ' +
+      escapeHtml(g.id) +
+      ' · Channel: ' +
+      escapeHtml(g.channelId || '—') +
+      '</div>' +
+      '</div>';
+  }
+  el.innerHTML = html;
+}
+
+async function loadWarnings() {
+  var j = await api('/api/warnings');
+  var list = j.users || [];
+  var el = document.getElementById('warnOut');
+  if (!list.length) {
+    el.innerHTML = '<p class="muted">No warnings stored.</p>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < list.length; i++) {
+    var u = list[i];
+    html +=
+      '<div class="list-item">' +
+      '<strong>User ' +
+      escapeHtml(u.userId) +
+      '</strong>' +
+      '<div class="meta">' +
+      escapeHtml(u.count) +
+      ' warning(s)</div>' +
+      '<div class="meta">' +
+      escapeHtml((u.lastReason || '').slice(0, 120)) +
+      '</div>' +
+      '</div>';
+  }
+  el.innerHTML = html;
+}
+
+document.getElementById('menuBtn').onclick = openMenu;
+document.getElementById('scrim').onclick = closeMenu;
+document.querySelector('.side-nav').onclick = function (e) {
+  var b = e.target.closest('button[data-tab]');
+  if (b) tab(b.getAttribute('data-tab'));
+};
+
+document.getElementById('btnStock').onclick = function () {
+  refreshStock();
+};
+document.getElementById('btnGenRefresh').onclick = function () {
+  refreshStock();
+};
+document.getElementById('btnGwRefresh').onclick = function () {
+  loadGiveaways();
+};
+document.getElementById('btnWarnRefresh').onclick = function () {
+  loadWarnings();
+};
+
+document.getElementById('btnGenAdd').onclick = async function () {
+  try {
+    var j = await api('/api/genadd', {
+      method: 'POST',
+      body: JSON.stringify({
+        product: document.getElementById('genProd').value,
+        lines: document.getElementById('genLines').value
+      })
+    });
+    document.getElementById('genMsg').innerHTML =
+      '<span class="ok">+' + j.added + ' (total ' + j.total + ')</span>';
+    document.getElementById('genLines').value = '';
+    refreshStock();
+  } catch (e) {
+    document.getElementById('genMsg').textContent = e.message;
+  }
+};
+
+document.getElementById('btnPayAdd').onclick = async function () {
+  try {
+    var j = await api('/api/payadd', {
+      method: 'POST',
+      body: JSON.stringify({
+        product: document.getElementById('payProd').value,
+        lines: document.getElementById('payLines').value
+      })
+    });
+    document.getElementById('payMsg').innerHTML =
+      '<span class="ok">+' + j.added + ' (total ' + j.total + ')</span>';
+    document.getElementById('payLines').value = '';
+    refreshStock();
+  } catch (e) {
+    document.getElementById('payMsg').textContent = e.message;
+  }
+};
+
+document.getElementById('methodsOut').onclick = async function (e) {
+  var save = e.target.closest('.btn-save-m');
+  var clear = e.target.closest('.btn-clear-m');
+  var btn = save || clear;
+  if (!btn) return;
+  var key = btn.getAttribute('data-key');
+  if (!key) return;
+  var ta = document.getElementById('m-' + key);
+  var msg = document.getElementById('mm-' + key);
+  try {
+    if (clear) ta.value = '';
+    await api('/api/methods', {
+      method: 'POST',
+      body: JSON.stringify({ product: key, text: ta.value })
+    });
+    msg.innerHTML = '<span class="ok">Saved</span>';
+    loadOverview();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+};
+
+document.getElementById('btnEco').onclick = async function () {
+  try {
+    await api('/api/economy', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: document.getElementById('ecoUser').value.trim(),
+        coins: Number(document.getElementById('ecoCoins').value || 0)
+      })
+    });
+    document.getElementById('ecoMsg').innerHTML = '<span class="ok">Saved</span>';
+  } catch (e) {
+    document.getElementById('ecoMsg').textContent = e.message;
+  }
+};
+
+document.getElementById('btnBlur').onclick = function () {
+  document.documentElement.style.setProperty(
+    '--blur',
+    (document.getElementById('blur').value || 1) + 'px'
+  );
+};
+
+document.getElementById('btnExport').onclick = async function () {
+  var r = await fetch('/api/export', { credentials: 'same-origin' });
   if (r.status === 401) return alert('Login required');
-  const blob = await r.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
+  var blob = await r.blob();
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
   a.href = url;
   a.download = 'flare-full-export.json';
   a.click();
   URL.revokeObjectURL(url);
 };
-document.getElementById('btnImport').onclick = async () => {
-  const f = document.getElementById('importFile').files[0];
+
+document.getElementById('btnImport').onclick = async function () {
+  var f = document.getElementById('importFile').files[0];
   if (!f) {
     document.getElementById('backupMsg').textContent = 'Choose a JSON file first';
     return;
   }
   try {
-    const text = await f.text();
-    const j = await api('/api/import', { method: 'POST', body: text });
-    document.getElementById('backupMsg').innerHTML = '<span class="ok">Imported ' + (j.keys || '') + ' keys — stocks & data live.</span>';
+    var text = await f.text();
+    var j = await api('/api/import', { method: 'POST', body: text });
+    document.getElementById('backupMsg').innerHTML =
+      '<span class="ok">Imported ' + (j.keys || '') + ' keys</span>';
     refreshStock();
+    loadOverview();
   } catch (e) {
     document.getElementById('backupMsg').textContent = e.message;
   }
 };
+
+boot().catch(function () {});
