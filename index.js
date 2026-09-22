@@ -171,9 +171,9 @@ if (!TOKEN) {
 }
 
 
-const OAUTH_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
-const OAUTH_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
-const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || 'https://flare-staff-bot.onrender.com/auth/callback';
+const OAUTH_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '').trim();
+const OAUTH_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SECRET || '').trim();
+const OAUTH_REDIRECT_URI = (process.env.OAUTH_REDIRECT_URI || process.env.REDIRECT_URI || '').trim();
 const dashSessions = new Map();
 
 function getCookie(req, name) {
@@ -190,7 +190,8 @@ function publicBase(req) {
   return `${proto}://${host}`;
 }
 function redirectUri(req) {
-  return OAUTH_REDIRECT_URI || `${publicBase(req)}/auth/callback`;
+  if (OAUTH_REDIRECT_URI) return OAUTH_REDIRECT_URI;
+  return `${publicBase(req)}/auth/callback`;
 }
 async function memberCanAccessDashboard(userId) {
   try {
@@ -266,36 +267,71 @@ http
         const q = new URLSearchParams({
           client_id: OAUTH_CLIENT_ID,
           response_type: 'code',
-          scope: 'identify guilds',
+          scope: 'identify',
           redirect_uri: redirectUri(req),
-          prompt: 'none'
+          prompt: 'consent'
         });
         res.writeHead(302, { Location: `https://discord.com/api/oauth2/authorize?${q}` });
         res.end();
         return;
       }
+      if (pathName === '/auth/debug') {
+        const ru = redirectUri(req);
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(
+          'Flare OAuth debug\n' +
+          '-----------------\n' +
+          'CLIENT_ID set: ' + (OAUTH_CLIENT_ID ? 'YES (' + OAUTH_CLIENT_ID.slice(0, 8) + '...)' : 'NO') + '\n' +
+          'CLIENT_SECRET set: ' + (OAUTH_CLIENT_SECRET ? 'YES (len=' + OAUTH_CLIENT_SECRET.length + ')' : 'NO') + '\n' +
+          'redirect_uri used: ' + ru + '\n' +
+          'Put that redirect_uri in Discord OAuth2 Redirects AND in OAUTH_REDIRECT_URI env.\n'
+        );
+        return;
+      }
       if (pathName === '/auth/callback') {
+        const errQ = url.searchParams.get('error');
+        if (errQ) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Discord error: ' + errQ + ' — ' + (url.searchParams.get('error_description') || ''));
+          return;
+        }
         const code = url.searchParams.get('code');
         if (!code) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Missing code');
+          res.end('Missing code — open /auth/login');
           return;
         }
+        if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Missing DISCORD_CLIENT_ID or DISCORD_CLIENT_SECRET on Render');
+          return;
+        }
+        const ru = redirectUri(req);
         const body = new URLSearchParams({
           client_id: OAUTH_CLIENT_ID,
           client_secret: OAUTH_CLIENT_SECRET,
           grant_type: 'authorization_code',
           code,
-          redirect_uri: redirectUri(req)
+          redirect_uri: ru
         });
-        const tok = await fetch('https://discord.com/api/oauth2/token', {
+        const tokRes = await fetch('https://discord.com/api/oauth2/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body
-        }).then((r) => r.json());
+          body: body.toString()
+        });
+        const tok = await tokRes.json().catch(() => ({}));
         if (!tok.access_token) {
-          res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('OAuth failed: ' + (tok.error || 'token'));
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(
+            'OAuth failed: ' + (tok.error || tokRes.status) + '\n' +
+            (tok.error_description || '') + '\n\n' +
+            'redirect_uri sent: ' + ru + '\n' +
+            'CLIENT_ID starts: ' + (OAUTH_CLIENT_ID || '').slice(0, 8) + '\n' +
+            'SECRET length: ' + String(OAUTH_CLIENT_SECRET || '').length + '\n' +
+            '1) Discord Redirects must equal redirect_uri above\n' +
+            '2) DISCORD_CLIENT_SECRET must be OAuth2 Client Secret (Reset Secret if unsure)\n' +
+            '3) NOT the bot token\n'
+          );
           return;
         }
         const user = await fetch('https://discord.com/api/users/@me', {
