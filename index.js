@@ -1032,7 +1032,33 @@ async function onReady() {
         .addStringOption(o => o.setName('account').setDescription('email:pass').setRequired(true)),
       new SlashCommandBuilder().setName('salary').setDescription('Send salary reward (restricted)')
         .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
-        .addIntegerOption(o => o.setName('amount').setDescription('How many'))
+        .addIntegerOption(o => o.setName('amount').setDescription('How many')),
+      new SlashCommandBuilder().setName('addstock').setDescription('Add to pay stock (staff)')
+        .addStringOption(o => o.setName('product').setDescription('mcfa nitro netflix…').setRequired(true))
+        .addStringOption(o => o.setName('lines').setDescription('email:pass lines').setRequired(true)),
+      new SlashCommandBuilder().setName('g3n').setDescription('Gen stock view or add')
+        .addStringOption(o => o.setName('action').setDescription('stock | add').setRequired(true)
+          .addChoices({ name: 'stock', value: 'stock' }, { name: 'add', value: 'add' }))
+        .addStringOption(o => o.setName('product').setDescription('For add: product name'))
+        .addStringOption(o => o.setName('lines').setDescription('For add: accounts')),
+      new SlashCommandBuilder().setName('genclear').setDescription('Clear gen stock for a product')
+        .addStringOption(o => o.setName('product').setDescription('mcfa…').setRequired(true)),
+      new SlashCommandBuilder().setName('hit').setDescription('Hits queue')
+        .addStringOption(o => o.setName('action').setDescription('start | stop | add').setRequired(true)
+          .addChoices({ name: 'start', value: 'start' }, { name: 'stop', value: 'stop' }, { name: 'add', value: 'add' }))
+        .addStringOption(o => o.setName('type').setDescription('hypixel | donut | etc'))
+        .addStringOption(o => o.setName('lines').setDescription('email:pass for add')),
+      new SlashCommandBuilder().setName('msg').setDescription('Post free/paid gen tutorial embeds (staff)')
+        .addStringOption(o => o.setName('which').setDescription('free | paid | both')
+          .addChoices({ name: 'free', value: 'free' }, { name: 'paid', value: 'paid' }, { name: 'both', value: 'both' })),
+      new SlashCommandBuilder().setName('birthday').setDescription('Birthday gift (owner)')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+      new SlashCommandBuilder().setName('mute').setDescription('Timeout a member')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addStringOption(o => o.setName('duration').setDescription('10m / 1h / 1d').setRequired(true))
+        .addStringOption(o => o.setName('reason').setDescription('Reason')),
+      new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
     ].map(c => c.toJSON());
     await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
     console.log('Slash commands registered (help pay claim stock fgen pgen …)');
@@ -4293,15 +4319,25 @@ client.on('interactionCreate', async (interaction) => {
     }
     if (interaction.isChatInputCommand()) {
       const name = interaction.commandName;
+      // Must ACK within 3s (free host cold start)
+      const ephemeralCmds = new Set(['stock','genstock','warnings','greroll','help','invites','cstatus','format','g3n','genclear']);
+      await interaction.deferReply({ ephemeral: ephemeralCmds.has(name) }).catch(() => null);
+      const reply = async (payload) => {
+        if (typeof payload === 'string') payload = { content: payload };
+        if (interaction.deferred || interaction.replied) {
+          return interaction.editReply(payload);
+        }
+        return reply(payload);
+      };
       if (name === 'gstart') {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: 'Staff only.', ephemeral: true });
+          return reply({ content: 'Staff only.' });
         }
         const timeRaw = interaction.options.getString('time');
         const winners = interaction.options.getInteger('winners') || 1;
         const prize = interaction.options.getString('prize');
         const ms = parseDuration(timeRaw);
-        if (!ms) return interaction.reply({ content: 'Bad time', ephemeral: true });
+        if (!ms) return reply({ content: 'Bad time', ephemeral: true });
         const ends = Date.now() + ms;
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('gw_join').setLabel('🎉 Join').setStyle(ButtonStyle.Success),
@@ -4311,7 +4347,7 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(0xbe2c71)
           .setTitle('🎉 GIVEAWAY')
           .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(ends/1000)}:R>`);
-        await interaction.reply({ embeds: [emb], components: [row] });
+        await reply({ embeds: [emb], components: [row] });
         const msg = await interaction.fetchReply();
         if (!data.giveaways) data.giveaways = {};
         data.giveaways[msg.id] = { channelId: interaction.channelId, prize, winners, ends, hostId: interaction.user.id, entries: [] };
@@ -4320,15 +4356,15 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
       if (name === 'greroll') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         const mid = interaction.options.getString('message_id');
         await endGiveaway(mid, true);
-        return interaction.reply({ content: 'Rerolled.', ephemeral: true });
+        return reply({ content: 'Rerolled.', ephemeral: true });
       }
 
       if (name === 'ban' || name === 'kick' || name === 'timeout' || name === 'untimeout' || name === 'warn' || name === 'warnings') {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: 'Staff only.', ephemeral: true });
+          return reply({ content: 'Staff only.', ephemeral: true });
         }
         const user = interaction.options.getUser('user');
         const reason = interaction.options.getString('reason') || 'No reason';
@@ -4338,7 +4374,7 @@ client.on('interactionCreate', async (interaction) => {
           const text = list.length
             ? list.map((w, i) => `**${i + 1}.** ${w.reason} — <t:${Math.floor(w.at / 1000)}:R> by <@${w.by}>`).join('\n')
             : 'No warnings.';
-          return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle(`Warnings — ${user.tag}`).setDescription(text)], ephemeral: true });
+          return reply({ embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle(`Warnings — ${user.tag}`).setDescription(text)], ephemeral: true });
         }
         if (name === 'warn') {
           if (!data.warnings) data.warnings = {};
@@ -4346,33 +4382,33 @@ client.on('interactionCreate', async (interaction) => {
           data.warnings[user.id].push({ reason, by: interaction.user.id, at: Date.now() });
           saveData();
           await user.send(`⚠️ You were warned in **${interaction.guild.name}**\nReason: ${reason}`).catch(() => {});
-          return interaction.reply({ content: `Warned **${user.tag}** — ${reason} (${data.warnings[user.id].length} total)`, ephemeral: false });
+          return reply({ content: `Warned **${user.tag}** — ${reason} (${data.warnings[user.id].length} total)`, ephemeral: false });
         }
-        if (!member) return interaction.reply({ content: 'Member not found in server.', ephemeral: true });
+        if (!member) return reply({ content: 'Member not found in server.', ephemeral: true });
         if (name === 'ban') {
           await member.ban({ reason: `${reason} | by ${interaction.user.tag}` });
-          return interaction.reply({ content: `Banned **${user.tag}** — ${reason}` });
+          return reply({ content: `Banned **${user.tag}** — ${reason}` });
         }
         if (name === 'kick') {
           await member.kick(`${reason} | by ${interaction.user.tag}`);
-          return interaction.reply({ content: `Kicked **${user.tag}** — ${reason}` });
+          return reply({ content: `Kicked **${user.tag}** — ${reason}` });
         }
         if (name === 'timeout') {
           const dur = interaction.options.getString('duration');
           const ms = parseDuration(dur);
-          if (!ms || ms > 28 * 86400000) return interaction.reply({ content: 'Duration: 10m / 1h / 1d (max 28d)', ephemeral: true });
+          if (!ms || ms > 28 * 86400000) return reply({ content: 'Duration: 10m / 1h / 1d (max 28d)', ephemeral: true });
           await member.timeout(ms, `${reason} | by ${interaction.user.tag}`);
-          return interaction.reply({ content: `Timed out **${user.tag}** for **${dur}** — ${reason}` });
+          return reply({ content: `Timed out **${user.tag}** for **${dur}** — ${reason}` });
         }
         if (name === 'untimeout') {
           await member.timeout(null, `Removed by ${interaction.user.tag}`);
-          return interaction.reply({ content: `Timeout removed for **${user.tag}**` });
+          return reply({ content: `Timeout removed for **${user.tag}**` });
         }
       }
 
       if (name === 'stock' || name === 'genstock') {
         if (!canViewStock(interaction.member)) {
-          return interaction.reply({ content: 'Members / staff only.', ephemeral: true });
+          return reply({ content: 'Members / staff only.', ephemeral: true });
         }
         ensureStocks(data);
         const pool = name === 'genstock' ? 'gen' : 'normal';
@@ -4384,14 +4420,14 @@ client.on('interactionCreate', async (interaction) => {
           if (pool === 'gen') return `${meta.emoji} **${meta.label}** gen \`${getStock(key,'gen').length}\``;
           return `${meta.emoji} **${meta.label}** pay \`${getStock(key).length}\` · gen \`${getStock(key,'gen').length}\``;
         });
-        return interaction.reply({
+        return reply({
           embeds: [new EmbedBuilder().setColor(0xbe2c71).setTitle(name === 'genstock' ? 'Gen stock' : 'Stock').setDescription(lines.join('\n'))],
           ephemeral: true
         });
       }
 
       if (name === 'help') {
-        return interaction.reply({
+        return reply({
           embeds: [
             new EmbedBuilder()
               .setColor(0x5865f2)
@@ -4415,13 +4451,13 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (name === 'best') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         const role = interaction.options.getRole('role');
         try { await interaction.guild.members.fetch(); } catch (_) {}
         const membersWithRole = interaction.guild.members.cache.filter(
           (m) => !m.user.bot && m.roles.cache.has(role.id)
         );
-        if (!membersWithRole.size) return interaction.reply({ content: `No members with **${role.name}**.`, ephemeral: true });
+        if (!membersWithRole.size) return reply({ content: `No members with **${role.name}**.`, ephemeral: true });
         const ranked = [...membersWithRole.values()]
           .map((m) => {
             const messages = data.messages[interaction.guild.id]?.[m.id] || 0;
@@ -4434,7 +4470,7 @@ client.on('interactionCreate', async (interaction) => {
           const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `**${i + 1}.**`;
           return `${medal} ${r.m} — **${r.score}** pts · 💬 ${r.messages} · 🎟️ ${r.invites}`;
         });
-        return interaction.reply({
+        return reply({
           embeds: [
             new EmbedBuilder()
               .setColor(0xe8c84a)
@@ -4447,7 +4483,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'online') {
         if (!isStaff(interaction.member) && !canViewStock(interaction.member)) {
-          return interaction.reply({ content: 'Staff / members only.', ephemeral: true });
+          return reply({ content: 'Staff / members only.', ephemeral: true });
         }
         const role = interaction.options.getRole('role');
         try { await interaction.guild.members.fetch(); } catch (_) {}
@@ -4455,7 +4491,7 @@ client.on('interactionCreate', async (interaction) => {
           (m) => !m.user.bot && m.presence && ['online', 'idle', 'dnd'].includes(m.presence.status)
         );
         const lines = [...online.values()].slice(0, 40).map((m) => `• ${m.displayName}`);
-        return interaction.reply({
+        return reply({
           embeds: [
             new EmbedBuilder()
               .setColor(0x57f287)
@@ -4468,7 +4504,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (name === 'staffstats') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         const roles = [
           ['Owner', OWNER_ROLE_ID],
           ['Co-Owner', CO_OWNER_ROLE_ID],
@@ -4485,7 +4521,7 @@ client.on('interactionCreate', async (interaction) => {
           const n = role.members.filter((m) => !m.user.bot).size;
           return `**${label}** — ${n} members`;
         }).filter(Boolean);
-        return interaction.reply({
+        return reply({
           embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle('Staff stats').setDescription(lines.join('\n'))],
           ephemeral: true
         });
@@ -4494,7 +4530,7 @@ client.on('interactionCreate', async (interaction) => {
       if (name === 'invites') {
         const user = interaction.options.getUser('user') || interaction.user;
         const n = getUserInvites(interaction.guildId, user.id);
-        return interaction.reply({ content: `**${user.tag}** has **${n}** invites tracked.`, ephemeral: true });
+        return reply({ content: `**${user.tag}** has **${n}** invites tracked.`, ephemeral: true });
       }
 
       if (name === 'flare') {
@@ -4503,7 +4539,7 @@ client.on('interactionCreate', async (interaction) => {
         if (action === 'top') {
           const entries = Object.entries(data.coins || {}).sort((a, b) => b[1] - a[1]).slice(0, 10);
           const lines = entries.map(([id, c], i) => `**${i + 1}.** <@${id}> — **${c}**`);
-          return interaction.reply({
+          return reply({
             embeds: [new EmbedBuilder().setColor(0xfee75c).setTitle('Flare top').setDescription(lines.join('\n') || 'Empty')],
             ephemeral: true
           });
@@ -4513,39 +4549,39 @@ client.on('interactionCreate', async (interaction) => {
           if (!data.daily) data.daily = {};
           const last = data.daily[key] || 0;
           if (Date.now() - last < 20 * 60 * 60 * 1000) {
-            return interaction.reply({ content: 'Daily already claimed. Try again later.', ephemeral: true });
+            return reply({ content: 'Daily already claimed. Try again later.', ephemeral: true });
           }
           data.daily[key] = Date.now();
           addCoins(key, 50);
-          return interaction.reply({ content: 'Daily claimed: **+50** coins.', ephemeral: true });
+          return reply({ content: 'Daily claimed: **+50** coins.', ephemeral: true });
         }
         if (action === 'give') {
           const amt = interaction.options.getInteger('amount') || 0;
           const to = interaction.options.getUser('user');
-          if (!to || amt < 1) return interaction.reply({ content: 'Need user + amount.', ephemeral: true });
-          if (getCoins(interaction.user.id) < amt) return interaction.reply({ content: 'Not enough coins.', ephemeral: true });
+          if (!to || amt < 1) return reply({ content: 'Need user + amount.', ephemeral: true });
+          if (getCoins(interaction.user.id) < amt) return reply({ content: 'Not enough coins.', ephemeral: true });
           addCoins(interaction.user.id, -amt);
           addCoins(to.id, amt);
-          return interaction.reply({ content: `Sent **${amt}** coins to **${to.tag}**.` });
+          return reply({ content: `Sent **${amt}** coins to **${to.tag}**.` });
         }
-        return interaction.reply({
+        return reply({
           content: `**${target.tag}** has **${getCoins(target.id)}** coins.`,
           ephemeral: true
         });
       }
 
       if (name === 'clear') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         setStock('mcfa', []);
         saveData();
-        return interaction.reply({ content: 'MCFA pay stock cleared.', ephemeral: true });
+        return reply({ content: 'MCFA pay stock cleared.', ephemeral: true });
       }
 
       if (name === 'genadd') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         const product = resolveProductKey(interaction.options.getString('product'));
         if (!product || PRODUCT_STOCKS[product]?.type === 'method') {
-          return interaction.reply({ content: 'Bad product.', ephemeral: true });
+          return reply({ content: 'Bad product.', ephemeral: true });
         }
         const lines = String(interaction.options.getString('lines') || '')
           .split(/[\n,]+/)
@@ -4558,11 +4594,11 @@ client.on('interactionCreate', async (interaction) => {
         }
         setStock(product, arr, 'gen');
         saveData();
-        return interaction.reply({ content: `Added **${added}** to gen **${product}** (total ${arr.length}).`, ephemeral: true });
+        return reply({ content: `Added **${added}** to gen **${product}** (total ${arr.length}).`, ephemeral: true });
       }
 
       if (name === 'cstatus') {
-        return interaction.reply({
+        return reply({
           embeds: [
             new EmbedBuilder()
               .setColor(0x57f287)
@@ -4579,7 +4615,7 @@ client.on('interactionCreate', async (interaction) => {
         const hasPaid = member.roles.cache.has(PAID_GEN_ROLE_ID);
         const isStaffUser = isStaff(member);
         if (name === 'pgen' && !interaction.options.getString('product')) {
-          return interaction.reply({
+          return reply({
             embeds: [
               new EmbedBuilder()
                 .setColor(0xfee75c)
@@ -4590,13 +4626,13 @@ client.on('interactionCreate', async (interaction) => {
           });
         }
         if (!hasFree && !hasPaid && !isStaffUser) {
-          return interaction.reply({ content: 'No gen access. Free status or paid role required.', ephemeral: true });
+          return reply({ content: 'No gen access. Free status or paid role required.', ephemeral: true });
         }
         const product = resolveProductKey(interaction.options.getString('product') || 'mcfa') || 'mcfa';
         const meta = PRODUCT_STOCKS[product];
-        if (!meta) return interaction.reply({ content: 'Unknown product.', ephemeral: true });
+        if (!meta) return reply({ content: 'Unknown product.', ephemeral: true });
         const taken = await takeFromStock(product, 1, 'gen');
-        if (!taken) return interaction.reply({ content: `**${meta.label}** gen stock empty.`, ephemeral: true });
+        if (!taken) return reply({ content: `**${meta.label}** gen stock empty.`, ephemeral: true });
         try {
           await interaction.user.send(`**${meta.label}**\n\`\`\`\n${taken[0]}\n\`\`\``);
         } catch (_) {
@@ -4604,29 +4640,29 @@ client.on('interactionCreate', async (interaction) => {
           arr.unshift(taken[0]);
           setStock(product, arr, 'gen');
           saveData();
-          return interaction.reply({ content: 'Could not DM you — open DMs and try again. Stock restored.', ephemeral: true });
+          return reply({ content: 'Could not DM you — open DMs and try again. Stock restored.', ephemeral: true });
         }
-        return interaction.reply({ content: `✅ **${meta.label}** sent to your DMs.`, ephemeral: true });
+        return reply({ content: `✅ **${meta.label}** sent to your DMs.`, ephemeral: true });
       }
 
       if (name === 'pay') {
-        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Staff only.', ephemeral: true });
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
         const user = interaction.options.getUser('user');
         const productKey = resolveProductKey(interaction.options.getString('product') || 'mcfa') || 'mcfa';
         const amount = Math.min(50, Math.max(1, interaction.options.getInteger('amount') || 1));
         const meta = PRODUCT_STOCKS[productKey];
         if (!meta || meta.type === 'method') {
           const text = getMethodText(productKey);
-          if (!text) return interaction.reply({ content: 'Product empty / unknown.', ephemeral: true });
+          if (!text) return reply({ content: 'Product empty / unknown.', ephemeral: true });
           try {
             await user.send(`**${meta.label}**\n${text}`);
           } catch (_) {
-            return interaction.reply({ content: 'Could not DM user.', ephemeral: true });
+            return reply({ content: 'Could not DM user.', ephemeral: true });
           }
-          return interaction.reply({ content: `Sent method **${meta.label}** to **${user.tag}**.` });
+          return reply({ content: `Sent method **${meta.label}** to **${user.tag}**.` });
         }
         const taken = await takeFromStock(productKey, amount, 'normal');
-        if (!taken || !taken.length) return interaction.reply({ content: 'Stock empty.', ephemeral: true });
+        if (!taken || !taken.length) return reply({ content: 'Stock empty.', ephemeral: true });
         try {
           await user.send(`**${meta.label}** ×${taken.length}\n\`\`\`\n${taken.join('\n')}\n\`\`\``);
         } catch (_) {
@@ -4634,13 +4670,13 @@ client.on('interactionCreate', async (interaction) => {
           arr.unshift(...taken);
           setStock(productKey, arr);
           saveData();
-          return interaction.reply({ content: 'Could not DM user. Stock restored.', ephemeral: true });
+          return reply({ content: 'Could not DM user. Stock restored.', ephemeral: true });
         }
-        return interaction.reply({ content: `Paid **${user.tag}** **${taken.length}× ${meta.label}**.` });
+        return reply({ content: `Paid **${user.tag}** **${taken.length}× ${meta.label}**.` });
       }
 
       if (name === 'claim') {
-        return interaction.reply({
+        return reply({
           content: 'Use `$claim` inside your reward **ticket** channel for the full claim flow.',
           ephemeral: true
         });
@@ -4650,16 +4686,16 @@ client.on('interactionCreate', async (interaction) => {
         const action = interaction.options.getString('action');
         if (action === 'open' || action === 'close') {
           if (!isCoOwnerOrAbove(interaction.member)) {
-            return interaction.reply({ content: 'Owner / Co-Owner only.', ephemeral: true });
+            return reply({ content: 'Owner / Co-Owner only.', ephemeral: true });
           }
           data.staffApplyOpen = action === 'open';
           saveData();
-          return interaction.reply({ content: `Staff applications **${action === 'open' ? 'OPEN' : 'CLOSED'}**.` });
+          return reply({ content: `Staff applications **${action === 'open' ? 'OPEN' : 'CLOSED'}**.` });
         }
         if (!data.staffApplyOpen) {
-          return interaction.reply({ content: 'Staff applications are closed.', ephemeral: true });
+          return reply({ content: 'Staff applications are closed.', ephemeral: true });
         }
-        return interaction.reply({
+        return reply({
           content: `To apply, open a ticket and use \`$staff apply\` (full form in Discord).`,
           ephemeral: true
         });
@@ -4668,7 +4704,7 @@ client.on('interactionCreate', async (interaction) => {
       if (name === 'format') {
         const account = interaction.options.getString('account') || '';
         const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+:.+$/.test(account);
-        return interaction.reply({
+        return reply({
           content: ok ? '✅ Looks like a valid `email:pass` format.' : '❌ Invalid format. Use `email:pass`.',
           ephemeral: true
         });
@@ -4676,12 +4712,12 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'salary') {
         if (!isCoOwnerOrAbove(interaction.member) && interaction.user.id !== BIRTHDAY_USER_ID) {
-          return interaction.reply({ content: 'Restricted.', ephemeral: true });
+          return reply({ content: 'Restricted.', ephemeral: true });
         }
         const user = interaction.options.getUser('user');
         const amount = Math.min(10, Math.max(1, interaction.options.getInteger('amount') || 1));
         const taken = await takeFromStock('mcfa', amount, 'normal');
-        if (!taken || !taken.length) return interaction.reply({ content: 'MCFA stock empty.', ephemeral: true });
+        if (!taken || !taken.length) return reply({ content: 'MCFA stock empty.', ephemeral: true });
         try {
           await user.send(`**Staff Salary**\n\`\`\`\n${taken.join('\n')}\n\`\`\``);
         } catch (_) {
@@ -4689,38 +4725,130 @@ client.on('interactionCreate', async (interaction) => {
           arr.unshift(...taken);
           setStock('mcfa', arr);
           saveData();
-          return interaction.reply({ content: 'Could not DM user.', ephemeral: true });
+          return reply({ content: 'Could not DM user.', ephemeral: true });
         }
-        return interaction.reply({ content: `Salary sent to **${user.tag}** (${taken.length} MCFA).` });
+        return reply({ content: `Salary sent to **${user.tag}** (${taken.length} MCFA).` });
       }
 
       if (name === 'close' || name === 'leave') {
-        return interaction.reply({
+        return reply({
           content: `Use \`$${name}\` inside a TeamUp channel for this action.`,
           ephemeral: true
         });
       }
 
       if (name === 'teamup') {
-        return interaction.reply({
+        return reply({
           content: 'Use `$teamup @user1 @user2 …` in Discord to create a TeamUp channel (needs category setup).',
           ephemeral: true
         });
       }
 
+
+      if (name === 'mute') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        const user = interaction.options.getUser('user');
+        const dur = interaction.options.getString('duration') || '1h';
+        const reason = interaction.options.getString('reason') || 'No reason';
+        const ms = parseDuration(dur);
+        if (!ms) return reply({ content: 'Bad duration. Use 10m / 1h / 1d' });
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+        if (!member) return reply({ content: 'Member not found.' });
+        await member.timeout(ms, `${reason} | by ${interaction.user.tag}`);
+        return reply({ content: `Timed out **${user.tag}** for **${dur}** — ${reason}` });
+      }
+      if (name === 'unmute') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        const user = interaction.options.getUser('user');
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+        if (!member) return reply({ content: 'Member not found.' });
+        await member.timeout(null, `Removed by ${interaction.user.tag}`);
+        return reply({ content: `Timeout removed for **${user.tag}**` });
+      }
+      if (name === 'addstock') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        const product = resolveProductKey(interaction.options.getString('product'));
+        const linesRaw = interaction.options.getString('lines') || '';
+        if (!product) return reply({ content: 'Unknown product.' });
+        if (PRODUCT_STOCKS[product]?.type === 'method') {
+          return reply({ content: 'That is a method — use `$' + product + ' set <text>`' });
+        }
+        const accounts = linesRaw.split(/[\n\s]+/).map(s => s.trim()).filter(Boolean);
+        const arr = getStock(product, 'normal');
+        let added = 0;
+        for (const a of accounts) {
+          if (!arr.includes(a)) { arr.push(a); added++; }
+        }
+        setStock(product, arr, 'normal');
+        saveData();
+        return reply({ content: `Pay stock **${product}** +${added} · total ${arr.length}` });
+      }
+      if (name === 'g3n') {
+        const action = interaction.options.getString('action') || 'stock';
+        if (action === 'add') {
+          if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+          const product = resolveProductKey(interaction.options.getString('product'));
+          const linesRaw = interaction.options.getString('lines') || '';
+          if (!product) return reply({ content: '/g3n action:add product:mcfa lines:email:pass' });
+          if (PRODUCT_STOCKS[product]?.type === 'method') {
+            return reply({ content: 'Methods: use `$' + product + ' set`' });
+          }
+          const accounts = linesRaw.split(/[\n\s]+/).map(s => s.trim()).filter(Boolean);
+          const arr = getStock(product, 'gen');
+          let added = 0;
+          for (const a of accounts) {
+            if (!arr.includes(a)) { arr.push(a); added++; }
+          }
+          setStock(product, arr, 'gen');
+          saveData();
+          return reply({ content: `Gen stock **${product}** +${added} · total ${arr.length}` });
+        }
+        if (!canViewStock(interaction.member)) return reply({ content: 'Members / staff only.' });
+        ensureStocks(data);
+        const lines = Object.entries(PRODUCT_STOCKS)
+          .filter(([, m]) => m.type !== 'method')
+          .map(([key, meta]) => `${meta.emoji} **${meta.label}** gen \`${getStock(key, 'gen').length}\``);
+        return reply({
+          embeds: [new EmbedBuilder().setColor(0x57f287).setTitle('🎁 GEN STOCK').setDescription(lines.join('\n') || 'Empty')]
+        });
+      }
+      if (name === 'genclear') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        const product = resolveProductKey(interaction.options.getString('product'));
+        if (!product) return reply({ content: 'Unknown product' });
+        const n = getStock(product, 'gen').length;
+        setStock(product, [], 'gen');
+        saveData();
+        return reply({ content: `Cleared ${n} from gen **${product}**` });
+      }
+      if (name === 'hit') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        return reply({ content: 'Use `$hit start` / `$hit stop` / `$hit add hypixel email:pass` in chat for the full hits system.' });
+      }
+      if (name === 'msg') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
+        return reply({ content: 'Use `$msg free` or `$msg paid` in a channel to post tutorial embeds.' });
+      }
+      if (name === 'birthday') {
+        if (interaction.user.id !== BIRTHDAY_USER_ID && !isCoOwnerOrAbove(interaction.member)) {
+          return reply({ content: 'Owner only.' });
+        }
+        return reply({ content: 'Use `$birthday gift @user` in a server channel.' });
+      }
+
       if (name === 'daily') {
         if (!isHeadAdminOrAbove(interaction.member)) {
-          return interaction.reply({ content: 'Head Admin+ only.', ephemeral: true });
+          return reply({ content: 'Head Admin+ only.', ephemeral: true });
         }
         const mode = interaction.options.getString('mode');
         const user = interaction.options.getUser('user');
         if (mode === 'pay' && user) {
-          return interaction.reply({
+          return reply({
             content: `Run \`$daily pay @${user.username}\` in a server channel for the full spin flow.`,
             ephemeral: true
           });
         }
-        return interaction.reply({ content: 'Usage: `/daily mode:pay user:@someone` or `$daily @role N`', ephemeral: true });
+        return reply({ content: 'Usage: `/daily mode:pay user:@someone` or `$daily @role N`', ephemeral: true });
       }
 
     }
