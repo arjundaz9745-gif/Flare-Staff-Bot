@@ -171,6 +171,7 @@ if (!TOKEN) {
 }
 
 
+const DASHBOARD_ADMIN_PASSWORD = process.env.DASHBOARD_ADMIN_PASSWORD || 'ultimate-admin';
 const OAUTH_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '').trim();
 const OAUTH_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SECRET || '').trim();
 const OAUTH_REDIRECT_URI = (process.env.OAUTH_REDIRECT_URI || process.env.REDIRECT_URI || '').trim();
@@ -258,106 +259,44 @@ http
         res.end(fs.readFileSync(f));
         return;
       }
-      if (pathName === '/auth/login') {
-        if (!OAUTH_CLIENT_ID) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Set DISCORD_CLIENT_ID + DISCORD_CLIENT_SECRET + OAUTH_REDIRECT_URI');
-          return;
-        }
-        const q = new URLSearchParams({
-          client_id: OAUTH_CLIENT_ID,
-          response_type: 'code',
-          scope: 'identify',
-          redirect_uri: redirectUri(req),
-          prompt: 'consent'
-        });
-        res.writeHead(302, { Location: `https://discord.com/api/oauth2/authorize?${q}` });
+      // Admin password login (Discord OAuth disabled for dashboard)
+      if (pathName === '/auth/login' && req.method === 'GET') {
+        res.writeHead(302, { Location: '/' });
         res.end();
         return;
       }
-      if (pathName === '/auth/debug') {
-        const ru = redirectUri(req);
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end(
-          'Flare OAuth debug\n' +
-          '-----------------\n' +
-          'CLIENT_ID set: ' + (OAUTH_CLIENT_ID ? 'YES (' + OAUTH_CLIENT_ID.slice(0, 8) + '...)' : 'NO') + '\n' +
-          'CLIENT_SECRET set: ' + (OAUTH_CLIENT_SECRET ? 'YES (len=' + OAUTH_CLIENT_SECRET.length + ')' : 'NO') + '\n' +
-          'redirect_uri used: ' + ru + '\n' +
-          'Put that redirect_uri in Discord OAuth2 Redirects AND in OAUTH_REDIRECT_URI env.\n'
-        );
+      if (pathName === '/auth/login' && req.method === 'POST') {
+        let body = {};
+        try {
+          body = await parseBody(req);
+        } catch (_) {}
+        const password = String(body.password || body.pass || '');
+        if (!password || password !== DASHBOARD_ADMIN_PASSWORD) {
+          return json(401, { error: 'Wrong password' });
+        }
+        const sid = 'admin';
+        dashSessions.set(sid, { tag: 'Admin', at: Date.now(), via: 'password' });
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Set-Cookie': `flare_uid=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`
+        });
+        res.end(JSON.stringify({ ok: true, tag: 'Admin' }));
         return;
       }
       if (pathName === '/auth/callback') {
-        const errQ = url.searchParams.get('error');
-        if (errQ) {
-          res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Discord error: ' + errQ + ' — ' + (url.searchParams.get('error_description') || ''));
-          return;
-        }
-        const code = url.searchParams.get('code');
-        if (!code) {
-          res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Missing code — open /auth/login');
-          return;
-        }
-        if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Missing DISCORD_CLIENT_ID or DISCORD_CLIENT_SECRET on Render');
-          return;
-        }
-        const ru = redirectUri(req);
-        const body = new URLSearchParams({
-          client_id: OAUTH_CLIENT_ID,
-          client_secret: OAUTH_CLIENT_SECRET,
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: ru
-        });
-        const tokRes = await fetch('https://discord.com/api/oauth2/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString()
-        });
-        const tok = await tokRes.json().catch(() => ({}));
-        if (!tok.access_token) {
-          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end(
-            'OAuth failed: ' + (tok.error || tokRes.status) + '\n' +
-            (tok.error_description || '') + '\n\n' +
-            'redirect_uri sent: ' + ru + '\n' +
-            'CLIENT_ID starts: ' + (OAUTH_CLIENT_ID || '').slice(0, 8) + '\n' +
-            'SECRET length: ' + String(OAUTH_CLIENT_SECRET || '').length + '\n' +
-            '1) Discord Redirects must equal redirect_uri above\n' +
-            '2) DISCORD_CLIENT_SECRET must be OAuth2 Client Secret (Reset Secret if unsure)\n' +
-            '3) NOT the bot token\n'
-          );
-          return;
-        }
-        const user = await fetch('https://discord.com/api/users/@me', {
-          headers: { Authorization: `Bearer ${tok.access_token}` }
-        }).then((r) => r.json());
-        const ok = await memberCanAccessDashboard(user.id);
-        if (!ok) {
-          res.writeHead(403, { 'Content-Type': 'text/html' });
-          res.end('<h1>Access denied</h1><p>Join Flare Rewards and have Member/Staff role.</p>');
-          return;
-        }
-        dashSessions.set(user.id, { tag: `${user.username}`, at: Date.now() });
-        res.writeHead(302, {
-          Location: '/',
-          'Set-Cookie': `flare_uid=${encodeURIComponent(user.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`
-        });
+        res.writeHead(302, { Location: '/' });
         res.end();
         return;
       }
       if (pathName === '/auth/logout') {
+        const uid = getCookie(req, 'flare_uid');
+        if (uid) dashSessions.delete(uid);
         res.writeHead(302, { Location: '/', 'Set-Cookie': 'flare_uid=; Path=/; Max-Age=0' });
         res.end();
         return;
       }
       const uid = getCookie(req, 'flare_uid');
-      const authed = uid && dashSessions.has(uid) && (await memberCanAccessDashboard(uid));
+      const authed = !!(uid && dashSessions.has(uid));
       if (pathName === '/api/status') {
         return json(200, {
           online: !!client.user,
@@ -365,7 +304,8 @@ http
           authed: !!authed,
           userId: authed ? uid : null,
           userTag: authed ? dashSessions.get(uid)?.tag : null,
-          error: !OAUTH_CLIENT_ID ? 'Missing OAuth env' : !authed && uid ? 'Not staff/member on Flare server' : undefined
+          error: undefined,
+          hint: authed ? undefined : 'Enter admin password to login'
         });
       }
       if (!authed && pathName.startsWith('/api/')) return json(401, { error: 'Login required' });
