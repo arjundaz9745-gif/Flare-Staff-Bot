@@ -56,6 +56,23 @@ function closeMenu() {
   document.getElementById('scrim').classList.add('hidden');
 }
 
+
+async function doPasswordLogin() {
+  var password = (document.getElementById('gatePassword') || {}).value || '';
+  var err = document.getElementById('gateErr');
+  if (!password) {
+    if (err) err.textContent = 'Enter password';
+    return;
+  }
+  try {
+    await api('/auth/login', { method: 'POST', body: JSON.stringify({ password: password }) });
+    if (err) err.textContent = '';
+    await boot();
+  } catch (e) {
+    if (err) err.textContent = e.message || 'Wrong password';
+  }
+}
+
 async function boot() {
   var s = await api('/api/status');
   if (!s.authed) {
@@ -359,4 +376,8 @@ document.getElementById('btnImport').onclick = async function () {
   }
 };
 
+var gateBtn = document.getElementById('gateLoginBtn');
+if (gateBtn) gateBtn.addEventListener('click', function () { doPasswordLogin(); });
+var gatePw = document.getElementById('gatePassword');
+if (gatePw) gatePw.addEventListener('keydown', function (e) { if (e.key === 'Enter') doPasswordLogin(); });
 boot().catch(function () {});
