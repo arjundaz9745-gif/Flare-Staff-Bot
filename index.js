@@ -15,6 +15,9 @@ const {
   ChannelType,
   PermissionsBitField,
   AttachmentBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   SlashCommandBuilder,
   REST,
   Routes
@@ -37,7 +40,11 @@ const HEAD_ADMIN_ROLE_ID = process.env.HEAD_ADMIN_ROLE_ID || '154036272751470189
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || '1540362727535419449'; // Moderator
 const STAFF_TEAM_ROLE_ID = process.env.STAFF_TEAM_ROLE_ID || '1540362727543799901'; // Staff
 const REWARD_STAFF_ROLE_ID = process.env.REWARD_STAFF_ROLE_ID || '1540362727543799901';
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID || ''; // optional: auto-prompt in new tickets
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID || ''; // category for support tickets
+const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID || ''; // welcome messages channel
+const WELCOME_MESSAGE = process.env.WELCOME_MESSAGE || 'Welcome {user} to **{server}**! You are member #{count}.';
+const TICKET_SUPPORT_ROLE_ID = process.env.TICKET_SUPPORT_ROLE_ID || process.env.STAFF_TEAM_ROLE_ID || '';
+
 
 // Anti-raid settings
 const ANTIRAID_LOG_CHANNEL_ID = process.env.ANTIRAID_LOG_CHANNEL_ID || ''; // optional log channel
@@ -509,6 +516,9 @@ function loadData() {
       if (!d.messages) d.messages = {};
       if (!d.invites) d.invites = {};
       if (!d.inviteUses) d.inviteUses = {};
+      if (!d.invitedBy) d.invitedBy = {}; // guildId -> memberId -> inviterId
+      if (!d.inviteStats) d.inviteStats = {}; // guildId -> userId -> { joins, leaves, fake, bonus }
+      if (!d.ticketCount) d.ticketCount = {};
       if (!Array.isArray(d.mcfaStock)) d.mcfaStock = [];
       if (!Array.isArray(d.mcfaUsed)) d.mcfaUsed = [];
       if (!Array.isArray(d.customStock)) d.customStock = [];
@@ -534,6 +544,9 @@ function loadData() {
     messages: {},
     invites: {},
     inviteUses: {},
+    invitedBy: {},
+    inviteStats: {},
+    ticketCount: {},
     mcfaStock: [],
     mcfaUsed: [],
     customStock: [],
@@ -674,9 +687,57 @@ const REWARD_TIERS = [
   { id: 10, invites: 12, name: '5,000 Robux Method', type: 'method' }
 ];
 
-function getUserInvites(guildId, userId) {
-  return data.invites[guildId]?.[userId] || 0;
+function ensureInviteStats(guildId, userId) {
+  if (!data.inviteStats) data.inviteStats = {};
+  if (!data.inviteStats[guildId]) data.inviteStats[guildId] = {};
+  if (!data.inviteStats[guildId][userId]) {
+    data.inviteStats[guildId][userId] = { joins: 0, leaves: 0, fake: 0, bonus: 0 };
+  }
+  // migrate old flat count once
+  const flat = data.invites?.[guildId]?.[userId];
+  if (typeof flat === 'number' && flat > 0 && data.inviteStats[guildId][userId].joins === 0) {
+    data.inviteStats[guildId][userId].joins = flat;
+  }
+  return data.inviteStats[guildId][userId];
 }
+
+/** Falcon-style totals: regular = joins - leaves - fake, total = regular + bonus */
+function getInviteBreakdown(guildId, userId) {
+  const s = ensureInviteStats(guildId, userId);
+  const joins = s.joins || 0;
+  const leaves = s.leaves || 0;
+  const fake = s.fake || 0;
+  const bonus = s.bonus || 0;
+  const regular = Math.max(0, joins - leaves - fake);
+  const total = Math.max(0, regular + bonus);
+  return { joins, leaves, fake, bonus, regular, total };
+}
+
+function getUserInvites(guildId, userId) {
+  return getInviteBreakdown(guildId, userId).total;
+}
+
+function buildFalconInviteEmbed(user, guildId) {
+  const b = getInviteBreakdown(guildId, user.id);
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setAuthor({
+      name: `${user.username}'s invites`,
+      iconURL: user.displayAvatarURL({ size: 128 })
+    })
+    .setThumbnail(user.displayAvatarURL({ size: 256 }))
+    .setDescription(
+      `**Total** \`${b.total}\`\n\n` +
+        `**Regular** \`${b.regular}\`\n` +
+        `**Bonus** \`${b.bonus}\`\n` +
+        `**Fake** \`${b.fake}\`\n` +
+        `**Leaves** \`${b.leaves}\`\n` +
+        `**Joins** \`${b.joins}\``
+    )
+    .setFooter({ text: 'Invite tracker · Joins − leaves − fake + bonus = total' })
+    .setTimestamp();
+}
+
 
 /** Parse Falcon -i / invites reply → { userId?, count } */
 function parseFalconInvites(msg) {
@@ -713,13 +774,17 @@ function parseFalconInvites(msg) {
 }
 
 function setFalconInvites(guildId, userId, count) {
-  if (!guildId || !userId) return;
+  if (!data.invites) data.invites = {};
   if (!data.invites[guildId]) data.invites[guildId] = {};
-  data.invites[guildId][userId] = Math.max(0, count);
+  const n = Math.max(0, count);
+  data.invites[guildId][userId] = n;
+  const s = ensureInviteStats(guildId, userId);
+  s.joins = n + (s.leaves || 0) + (s.fake || 0);
+  s.bonus = s.bonus || 0;
   if (!data.falconInvites) data.falconInvites = {};
   if (!data.falconInvites[guildId]) data.falconInvites[guildId] = {};
   data.falconInvites[guildId][userId] = {
-    count,
+    count: n,
     at: new Date().toISOString()
   };
   saveData();
@@ -1102,6 +1167,107 @@ async function startBdayStory(channel, user) {
 }
 
 
+
+// ========== Ticket panel ==========
+
+async function postTicketPanel(channel, { description, bannerUrl, bannerAttachment } = {}) {
+  const desc =
+    (description && String(description).trim()) ||
+    'Need help or want to claim a reward?\n\nClick **Open ticket** below.\nA private channel will be created for you and staff.';
+  const embed = new EmbedBuilder()
+    .setColor(0xbe2c71)
+    .setTitle('Support tickets')
+    .setDescription(desc)
+    .setFooter({ text: 'Flare Drop · Tickets' });
+  if (bannerUrl) embed.setImage(bannerUrl);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_open')
+      .setLabel('Open ticket')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const payload = { embeds: [embed], components: [row] };
+  if (bannerAttachment) payload.files = [bannerAttachment];
+  return channel.send(payload);
+}
+
+async function createSupportTicket(guild, user, reason) {
+  if (!data.ticketCount) data.ticketCount = {};
+  data.ticketCount[guild.id] = (data.ticketCount[guild.id] || 0) + 1;
+  const n = data.ticketCount[guild.id];
+  saveData();
+
+  const overwrites = [
+    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+    {
+      id: user.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.AttachFiles,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    },
+    {
+      id: client.user.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ManageChannels
+      ]
+    }
+  ];
+  if (TICKET_SUPPORT_ROLE_ID) {
+    overwrites.push({
+      id: TICKET_SUPPORT_ROLE_ID,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    });
+  }
+
+  const parent = TICKET_CATEGORY_ID || undefined;
+  const channel = await guild.channels.create({
+    name: `ticket-${n}-${user.username}`.slice(0, 90).toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    type: ChannelType.GuildText,
+    parent: parent || null,
+    permissionOverwrites: overwrites,
+    topic: `Ticket for ${user.id} | ${reason || 'support'}`
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor(0xbe2c71)
+    .setTitle('Support ticket')
+    .setDescription(
+      `Hello ${user}!\n\nStaff will help you soon.\n` +
+        (reason ? `**Reason:** ${reason}\n` : '') +
+        `\nClose: \`$close\` or the button below.`
+    )
+    .setFooter({ text: 'Flare Drop · Tickets' })
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_close')
+      .setLabel('Close ticket')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  await channel.send({
+    content: TICKET_SUPPORT_ROLE_ID
+      ? `${user} · <@&${TICKET_SUPPORT_ROLE_ID}>`
+      : `${user}`,
+    embeds: [embed],
+    components: [row]
+  });
+  return channel;
+}
+
+
 async function onReady() {
   cleanupClosedTickets();
   setInterval(cleanupClosedTickets, 10 * 60 * 1000);
@@ -1146,6 +1312,11 @@ async function onReady() {
           ))
         .addUserOption(o => o.setName('user').setDescription('User (for balance/give)'))
         .addIntegerOption(o => o.setName('amount').setDescription('Amount (for give)')),
+      new SlashCommandBuilder().setName('ticketpanel').setDescription('Post ticket panel (staff)')
+        .addStringOption(o => o.setName('description').setDescription('Panel text (optional)').setRequired(false))
+        .addAttachmentOption(o => o.setName('banner').setDescription('Optional banner image under the panel').setRequired(false)),
+      new SlashCommandBuilder().setName('setwelcome').setDescription('Set welcome channel (staff)')
+        .addChannelOption(o => o.setName('channel').setDescription('Welcome channel').setRequired(true)),
       new SlashCommandBuilder().setName('invites').setDescription('Show invite count')
         .addUserOption(o => o.setName('user').setDescription('User (optional)')),
       new SlashCommandBuilder().setName('clear').setDescription('Clear MCFA pay stock (staff)'),
@@ -1262,6 +1433,7 @@ client.on('inviteCreate', async (invite) => {
 
 client.on('guildMemberAdd', async (member) => {
   const guild = member.guild;
+  let inviterId = null;
   try {
     const invites = await guild.invites.fetch();
     const previous = data.inviteUses[guild.id] || {};
@@ -1278,16 +1450,82 @@ client.on('guildMemberAdd', async (member) => {
       };
     });
     if (used && used.inviter) {
+      inviterId = used.inviter.id;
       const gid = guild.id;
-      const uid = used.inviter.id;
+      const s = ensureInviteStats(gid, inviterId);
+      s.joins = (s.joins || 0) + 1;
       if (!data.invites[gid]) data.invites[gid] = {};
-      data.invites[gid][uid] = (data.invites[gid][uid] || 0) + 1;
+      data.invites[gid][inviterId] = getInviteBreakdown(gid, inviterId).total;
+      if (!data.invitedBy[gid]) data.invitedBy[gid] = {};
+      data.invitedBy[gid][member.id] = inviterId; // for leave cancellation
+      // mark join time for fake detection (leave < 1 day = fake optional)
+      if (!data.inviteJoinAt) data.inviteJoinAt = {};
+      if (!data.inviteJoinAt[gid]) data.inviteJoinAt[gid] = {};
+      data.inviteJoinAt[gid][member.id] = Date.now();
     }
     saveData();
   } catch (e) {
     console.error('guildMemberAdd invite track:', e.message);
   }
+
+  // Welcome message
+  try {
+    const chId = (data.settings && data.settings.welcomeChannelId) || WELCOME_CHANNEL_ID;
+    const ch = chId
+      ? await guild.channels.fetch(chId).catch(() => null)
+      : guild.systemChannel;
+    if (ch && ch.isTextBased?.()) {
+      const msg = String(WELCOME_MESSAGE)
+        .replace(/\{user\}/gi, `${member}`)
+        .replace(/\{server\}/gi, guild.name)
+        .replace(/\{count\}/gi, String(guild.memberCount))
+        .replace(/\{inviter\}/gi, inviterId ? `<@${inviterId}>` : 'Unknown');
+      const embed = new EmbedBuilder()
+        .setColor(0xbe2c71)
+        .setTitle('Welcome')
+        .setDescription(msg)
+        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setFooter({
+          text: inviterId
+            ? `Invited by someone · Total members ${guild.memberCount}`
+            : `Total members ${guild.memberCount}`
+        })
+        .setTimestamp();
+      if (inviterId) {
+        embed.addFields({ name: 'Invited by', value: `<@${inviterId}>`, inline: true });
+      }
+      await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
+    }
+  } catch (e) {
+    console.error('welcome:', e.message);
+  }
 });
+
+// Invite cancellation when member leaves
+client.on('guildMemberRemove', async (member) => {
+  try {
+    const gid = member.guild.id;
+    const inviterId = data.invitedBy?.[gid]?.[member.id];
+    if (inviterId) {
+      const s = ensureInviteStats(gid, inviterId);
+      s.leaves = (s.leaves || 0) + 1;
+      // left within 24h → count as fake (Falcon-style)
+      const joinedAt = data.inviteJoinAt?.[gid]?.[member.id];
+      if (joinedAt && Date.now() - joinedAt < 24 * 60 * 60 * 1000) {
+        s.fake = (s.fake || 0) + 1;
+      }
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][inviterId] = getInviteBreakdown(gid, inviterId).total;
+      delete data.invitedBy[gid][member.id];
+      if (data.inviteJoinAt?.[gid]) delete data.inviteJoinAt[gid][member.id];
+      saveData();
+      console.log(`Invite leave: ${member.id} → inviter ${inviterId} leaves=${s.leaves}`);
+    }
+  } catch (e) {
+    console.error('guildMemberRemove invite cancel:', e.message);
+  }
+});
+
 
 
 
@@ -4267,6 +4505,87 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
     return;
   }
 
+
+  // ========== $ticketpanel [description] + optional image ==========
+  if (cmd === 'ticketpanel' || cmd === 'ticket-panel') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const description = args.join(' ').trim() || null;
+    let bannerUrl = null;
+    let bannerAttachment = null;
+    const img = message.attachments.find(
+      (a) => (a.contentType && a.contentType.startsWith('image/')) || /\.(png|jpe?g|gif|webp)$/i.test(a.name || '')
+    );
+    if (img) {
+      bannerAttachment = new AttachmentBuilder(img.url, { name: 'ticket-banner.png' });
+      bannerUrl = 'attachment://ticket-banner.png';
+    }
+    await postTicketPanel(message.channel, { description, bannerUrl, bannerAttachment });
+    return message.reply('Ticket panel posted.').then((m) => setTimeout(() => m.delete().catch(() => {}), 4000));
+  }
+
+  // ========== $setwelcome #channel ==========
+  if (cmd === 'setwelcome') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const ch = message.mentions.channels.first();
+    if (!ch) {
+      return message.reply(
+        'Usage: `$setwelcome #channel`\n' +
+          'Or set env `WELCOME_CHANNEL_ID`.\n' +
+          'Message template env `WELCOME_MESSAGE` supports `{user}` `{server}` `{count}` `{inviter}`'
+      );
+    }
+    // store in data for runtime without redeploy
+    if (!data.settings) data.settings = {};
+    data.settings.welcomeChannelId = ch.id;
+    saveData();
+    return message.reply(`Welcome channel set to ${ch}. (Also set WELCOME_CHANNEL_ID in env for reboot persistence.)`);
+  }
+
+  // ========== $invites [@user] ==========
+  if (cmd === 'invites' || cmd === 'inv' || cmd === 'invite') {
+    const sub = (args[0] || '').toLowerCase();
+    if (sub === 'top' || sub === 'lb' || sub === 'leaderboard') {
+      const gid = message.guild.id;
+      const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
+      const rows = Object.keys(stats)
+        .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+      if (!rows.length) return message.reply('No invite data yet.');
+      const lines = [];
+      for (let i = 0; i < rows.length; i++) {
+        let name = rows[i].id;
+        try {
+          name = (await client.users.fetch(rows[i].id)).username;
+        } catch (_) {}
+        lines.push(`**${i + 1}.** ${name} — **${rows[i].total}** (regular ${rows[i].regular} · leaves ${rows[i].leaves})`);
+      }
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle('Invite leaderboard')
+            .setDescription(lines.join('\n'))
+        ]
+      });
+    }
+    if (sub === 'bonus' && isStaff(message.member)) {
+      const u = message.mentions.users.first();
+      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
+      if (!u || Number.isNaN(amount)) {
+        return message.reply('Usage: `$invites bonus @user 5` (staff)');
+      }
+      const s = ensureInviteStats(message.guild.id, u.id);
+      s.bonus = (s.bonus || 0) + amount;
+      data.invites[message.guild.id] = data.invites[message.guild.id] || {};
+      data.invites[message.guild.id][u.id] = getInviteBreakdown(message.guild.id, u.id).total;
+      saveData();
+      return message.reply(`Bonus invites for **${u.username}**: now **${s.bonus}** bonus (total **${getUserInvites(message.guild.id, u.id)}**)`);
+    }
+    const u = message.mentions.users.first() || message.author;
+    return message.reply({ embeds: [buildFalconInviteEmbed(u, message.guild.id)] });
+  }
+
   if (cmd === 'help') {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
@@ -4461,6 +4780,29 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId === 'ticket_open_modal') {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+          const reason = interaction.fields.getTextInputValue('ticket_reason')?.trim() || 'support';
+          const existing = interaction.guild.channels.cache.find(
+            (c) =>
+              c.topic &&
+              c.topic.includes(interaction.user.id) &&
+              (c.name || '').startsWith('ticket-')
+          );
+          if (existing) {
+            return interaction.editReply({ content: `You already have ${existing}` });
+          }
+          const ch = await createSupportTicket(interaction.guild, interaction.user, reason);
+          return interaction.editReply({ content: `Ticket created: ${ch}` });
+        } catch (e) {
+          console.error('ticket modal', e.message);
+          return interaction.editReply({ content: 'Could not create ticket (permissions / category?).' });
+        }
+      }
+    }
     if (interaction.isButton()) {
       const id = interaction.customId;
 
@@ -4525,6 +4867,45 @@ client.on('interactionCreate', async (interaction) => {
             files: files.length ? files : undefined
           })
           .catch(() => {});
+        return;
+      }
+
+      if (id === 'ticket_open') {
+        const existing = interaction.guild.channels.cache.find(
+          (c) =>
+            c.topic &&
+            c.topic.includes(interaction.user.id) &&
+            (c.name || '').startsWith('ticket-')
+        );
+        if (existing) {
+          return interaction.reply({ content: `You already have ${existing}`, ephemeral: true });
+        }
+        const modal = new ModalBuilder()
+          .setCustomId('ticket_open_modal')
+          .setTitle('Open ticket');
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('ticket_reason')
+          .setLabel('Why are you opening a ticket?')
+          .setPlaceholder('e.g. help, claim reward… (optional)')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(500);
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        return interaction.showModal(modal);
+      }
+      if (id === 'ticket_close') {
+        if (!interaction.channel || !isTicketChannel(interaction.channel)) {
+          return interaction.reply({ content: 'Not a ticket channel.', ephemeral: true });
+        }
+        const staff = isStaff(interaction.member);
+        const ownerId = (interaction.channel.topic || '').match(/(\d{15,})/)?.[1];
+        if (!staff && interaction.user.id !== ownerId) {
+          return interaction.reply({ content: 'Only ticket owner or staff can close.', ephemeral: true });
+        }
+        await interaction.reply('Closing ticket in 3 seconds…');
+        setTimeout(() => {
+          interaction.channel.delete('Ticket closed').catch(() => {});
+        }, 3000);
         return;
       }
 
@@ -4753,10 +5134,31 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
+      if (name === 'ticketpanel') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const description = interaction.options.getString('description');
+        const banner = interaction.options.getAttachment('banner');
+        let bannerUrl = null;
+        let bannerAttachment = null;
+        if (banner) {
+          bannerAttachment = new AttachmentBuilder(banner.url, { name: 'ticket-banner.png' });
+          bannerUrl = 'attachment://ticket-banner.png';
+        }
+        await postTicketPanel(interaction.channel, { description, bannerUrl, bannerAttachment });
+        return reply({ content: 'Ticket panel posted.', ephemeral: true });
+      }
+      if (name === 'setwelcome') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const ch = interaction.options.getChannel('channel', true);
+        if (!data.settings) data.settings = {};
+        data.settings.welcomeChannelId = ch.id;
+        saveData();
+        return reply({ content: `Welcome channel set to ${ch}.`, ephemeral: true });
+      }
       if (name === 'invites') {
+
         const user = interaction.options.getUser('user') || interaction.user;
-        const n = getUserInvites(interaction.guildId, user.id);
-        return reply({ content: `**${user.tag}** has **${n}** invites tracked.`, ephemeral: true });
+        return reply({ embeds: [buildFalconInviteEmbed(user, interaction.guildId)] });
       }
 
       if (name === 'flare') {
