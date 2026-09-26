@@ -46,12 +46,25 @@ const WELCOME_MESSAGE = process.env.WELCOME_MESSAGE || 'Welcome {user} to **{ser
 const TICKET_SUPPORT_ROLE_ID = process.env.TICKET_SUPPORT_ROLE_ID || process.env.STAFF_TEAM_ROLE_ID || '';
 
 
-// Anti-raid settings
+// Anti-raid / automod / anti-nuke settings
 const ANTIRAID_LOG_CHANNEL_ID = process.env.ANTIRAID_LOG_CHANNEL_ID || ''; // optional log channel
 const TEAMUP_CATEGORY_ID = process.env.TEAMUP_CATEGORY_ID || ''; // optional category for teamup tickets
 const MASS_PING_LIMIT = 3;          // same user mentioned this many times
 const MASS_PING_WINDOW_MS = 15000;  // within 15 seconds
 const MASS_PING_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const SPAM_MSG_LIMIT = parseInt(process.env.SPAM_MSG_LIMIT || '6', 10); // messages
+const SPAM_WINDOW_MS = parseInt(process.env.SPAM_WINDOW_MS || '5000', 10);
+const SPAM_TIMEOUT_MS = parseInt(process.env.SPAM_TIMEOUT_MS || String(10 * 60 * 1000), 10); // 10m
+const JOIN_RAID_LIMIT = parseInt(process.env.JOIN_RAID_LIMIT || '8', 10); // joins
+const JOIN_RAID_WINDOW_MS = parseInt(process.env.JOIN_RAID_WINDOW_MS || '15000', 10);
+const NUKE_ACTION_LIMIT = parseInt(process.env.NUKE_ACTION_LIMIT || '3', 10); // channel deletes / bans
+const NUKE_WINDOW_MS = parseInt(process.env.NUKE_WINDOW_MS || '20000', 10);
+const BAD_WORDS = (process.env.BAD_WORDS || 'nigger,faggot,retard')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const AUTOMOD_ENABLED = process.env.AUTOMOD_ENABLED !== 'false';
+const ANTINUKE_ENABLED = process.env.ANTINUKE_ENABLED !== 'false';
 
 
 // Product stock keys (Ultimate multi-stock)
@@ -515,6 +528,44 @@ document.addEventListener('DOMContentLoaded', function() {
         }));
         return json(200, { giveaways: list });
       }
+      
+      
+      if (pathName === '/api/invites' || pathName.startsWith('/api/invites?')) {
+        const g = client.guilds.cache.first()?.id;
+        if (!g) return json(200, { top: [] });
+        const stats = data.inviteStats?.[g] || data.invites?.[g] || {};
+        const rows = [];
+        for (const id of Object.keys(stats)) {
+          const b = getInviteBreakdown(g, id);
+          let name = id;
+          try { name = (await client.users.fetch(id)).username; } catch (_) {}
+          rows.push({ id, name, ...b });
+        }
+        rows.sort((a, b) => b.total - a.total);
+        return json(200, { top: rows.slice(0, 25), guildId: g });
+      }
+
+      if (pathName === '/api/protection') {
+        if (req.method === 'GET') {
+          return json(200, { protection: getProtection() });
+        }
+        if (req.method === 'POST') {
+          const body = await parseBody();
+          const allowed = [
+            'automod', 'antinuke', 'antiraid', 'logChannelId', 'badWords',
+            'spamMsgLimit', 'spamWindowMs', 'spamTimeoutMs',
+            'joinRaidLimit', 'joinRaidWindowMs',
+            'nukeActionLimit', 'nukeWindowMs',
+            'massPingLimit', 'massPingWindowMs', 'massPingTimeoutMs'
+          ];
+          const patch = {};
+          for (const k of allowed) {
+            if (body[k] !== undefined) patch[k] = body[k];
+          }
+          return json(200, { protection: saveProtection(patch) });
+        }
+      }
+
       if (pathName === '/api/warnings') {
         const users = Object.entries(data.warnings || {}).map(([userId, arr]) => ({
           userId,
@@ -604,7 +655,11 @@ let data = loadData();
 ensureStocks(data);
 
 // In-memory anti-raid trackers (reset on restart – fine for short windows)
-const recentMentions = new Map(); // key: `${authorId}:${targetId}` → timestamps[]
+const recentMentions = new Map();
+const spamTracker = new Map(); // userId -> timestamps[]
+const joinRaidTracker = new Map(); // guildId -> timestamps[]
+const nukeTracker = new Map(); // actorId:type -> timestamps[]
+ // key: `${authorId}:${targetId}` → timestamps[]
 const recentChannelRenames = new Map();
 
 const hitRunner = { running: false, timer: null, channelId: null, index: 0, queue: [] };
@@ -1296,6 +1351,78 @@ async function createSupportTicket(guild, user, reason) {
 }
 
 
+
+async function protectionLog(guild, title, description, color = 0xed4245) {
+  try {
+    const logId = getProtection().logChannelId || ANTIRAID_LOG_CHANNEL_ID;
+    if (!logId) return;
+    const ch = guild.channels.cache.get(logId) ||
+      await guild.channels.fetch(logId).catch(() => null);
+    if (!ch) return;
+    await ch.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(color)
+          .setTitle(title)
+          .setDescription(description)
+          .setTimestamp()
+          .setFooter({ text: 'Flare Protection' })
+      ]
+    }).catch(() => {});
+  } catch (_) {}
+}
+
+function trackWindow(map, key, windowMs) {
+  const now = Date.now();
+  let arr = (map.get(key) || []).filter((t) => now - t < windowMs);
+  arr.push(now);
+  map.set(key, arr);
+  return arr.length;
+}
+
+function isProtectedStaff(member) {
+  if (!member) return false;
+  if (member.id === member.guild?.ownerId) return true;
+  if (typeof isCoOwnerOrAbove === 'function' && isCoOwnerOrAbove(member)) return true;
+  if (typeof isStaff === 'function' && isStaff(member)) return true;
+  return member.permissions?.has?.(PermissionFlagsBits.Administrator);
+}
+
+
+function getProtection() {
+  if (!data.protection || typeof data.protection !== 'object') {
+    data.protection = {
+      automod: true,
+      antinuke: true,
+      antiraid: true,
+      logChannelId: '',
+      badWords: ['nigger', 'faggot', 'retard'],
+      spamMsgLimit: 6,
+      spamWindowMs: 5000,
+      spamTimeoutMs: 10 * 60 * 1000,
+      joinRaidLimit: 8,
+      joinRaidWindowMs: 15000,
+      nukeActionLimit: 3,
+      nukeWindowMs: 20000,
+      massPingLimit: 3,
+      massPingWindowMs: 15000,
+      massPingTimeoutMs: 3 * 24 * 60 * 60 * 1000
+    };
+  }
+  const p = data.protection;
+  // coerce
+  if (!Array.isArray(p.badWords)) p.badWords = [];
+  return p;
+}
+
+function saveProtection(patch = {}) {
+  const p = getProtection();
+  Object.assign(p, patch);
+  data.protection = p;
+  saveData();
+  return p;
+}
+
 async function onReady() {
   cleanupClosedTickets();
   setInterval(cleanupClosedTickets, 10 * 60 * 1000);
@@ -1436,7 +1563,40 @@ async function onReady() {
         .addStringOption(o => o.setName('duration').setDescription('10m / 1h / 1d').setRequired(true))
         .addStringOption(o => o.setName('reason').setDescription('Reason')),
       new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout')
-        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+      new SlashCommandBuilder().setName('protection').setDescription('Protection status / toggles (staff)')
+        .addStringOption(o =>
+          o.setName('action').setDescription('What to do')
+            .addChoices(
+              { name: 'status', value: 'status' },
+              { name: 'automod_on', value: 'automod_on' },
+              { name: 'automod_off', value: 'automod_off' },
+              { name: 'antinuke_on', value: 'antinuke_on' },
+              { name: 'antinuke_off', value: 'antinuke_off' }
+            )
+        ),
+      new SlashCommandBuilder().setName('si').setDescription('Server information'),
+      new SlashCommandBuilder().setName('m').setDescription('Message count')
+        .addUserOption(o => o.setName('user')),
+      new SlashCommandBuilder().setName('i').setDescription('Invite card')
+        .addUserOption(o => o.setName('user')),
+      new SlashCommandBuilder().setName('rmi').setDescription('Remove invites (staff)')
+        .addUserOption(o => o.setName('user').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setMinValue(1)),
+      new SlashCommandBuilder().setName('lock').setDescription('Lock channel (staff)'),
+      new SlashCommandBuilder().setName('unlock').setDescription('Unlock channel (staff)'),
+      new SlashCommandBuilder().setName('slowmode').setDescription('Slowmode (staff)')
+        .addIntegerOption(o => o.setName('seconds').setRequired(true).setMinValue(0).setMaxValue(21600)),
+      new SlashCommandBuilder().setName('purge').setDescription('Bulk delete messages (staff)')
+        .addIntegerOption(o => o.setName('amount').setRequired(true).setMinValue(1).setMaxValue(100)),
+      new SlashCommandBuilder().setName('nick').setDescription('Set nickname (staff)')
+        .addUserOption(o => o.setName('user').setRequired(true))
+        .addStringOption(o => o.setName('nickname')),
+      new SlashCommandBuilder().setName('role').setDescription('Add/remove role (staff)')
+        .addStringOption(o => o.setName('action').setRequired(true)
+          .addChoices({ name: 'add', value: 'add' }, { name: 'remove', value: 'remove' }))
+        .addUserOption(o => o.setName('user').setRequired(true))
+        .addRoleOption(o => o.setName('role').setRequired(true))
     ].map(c => c.toJSON());
     await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
     console.log('Slash commands registered (help pay claim stock fgen pgen …)');
@@ -1486,6 +1646,27 @@ client.on('inviteCreate', async (invite) => {
 client.on('guildMemberAdd', async (member) => {
   const guild = member.guild;
   let inviterId = null;
+  // Join-raid detection
+  try {
+    if (getProtection().antinuke) {
+      const protJ = getProtection();
+      const joins = trackWindow(joinRaidTracker, member.guild.id, protJ.joinRaidWindowMs);
+      if (joins >= protJ.joinRaidLimit) {
+        await protectionLog(
+          member.guild,
+          'Anti-raid · Mass join',
+          `**${joins}** joins in ${Math.round(protJ.joinRaidWindowMs / 1000)}s.\nLatest: ${member.user.tag}`
+        );
+        // timeout newest non-staff joiners is aggressive; just log + optional kick if very new account
+        const age = Date.now() - member.user.createdTimestamp;
+        if (age < 3 * 24 * 60 * 60 * 1000) {
+          await member.kick('Anti-raid: mass join + new account').catch(() => {});
+        }
+      }
+    }
+  } catch (_) {}
+
+
   try {
     const invites = await guild.invites.fetch();
     const previous = data.inviteUses[guild.id] || {};
@@ -1953,11 +2134,12 @@ client.on('messageCreate', async (message) => {
 
         const key = `${message.author.id}:${targetId}`;
         let times = recentMentions.get(key) || [];
-        times = times.filter((t) => now - t < MASS_PING_WINDOW_MS);
+        const _mpWin = getProtection().massPingWindowMs || MASS_PING_WINDOW_MS;
+        times = times.filter((t) => now - t < _mpWin);
         times.push(now);
         recentMentions.set(key, times);
 
-        if (times.length >= MASS_PING_LIMIT) {
+        if (times.length >= (getProtection().massPingLimit || MASS_PING_LIMIT)) {
           recentMentions.delete(key);
           // Apply 3-day timeout
           await message.member.timeout(MASS_PING_TIMEOUT_MS, `Anti-raid: mass pinged the same user ${MASS_PING_LIMIT}+ times`);
@@ -1966,7 +2148,7 @@ client.on('messageCreate', async (message) => {
           ).catch(() => {});
 
           // Optional log
-          if (ANTIRAID_LOG_CHANNEL_ID) {
+          if (getProtection().logChannelId || ANTIRAID_LOG_CHANNEL_ID) {
             const logCh = message.guild.channels.cache.get(ANTIRAID_LOG_CHANNEL_ID);
             if (logCh) {
               const embed = new EmbedBuilder()
@@ -1991,6 +2173,61 @@ client.on('messageCreate', async (message) => {
     }
   } catch (e) {
     console.error('Mass-ping protection error:', e.message);
+  }
+
+
+  // ========== AUTO-MOD: spam + bad words ==========
+  try {
+    if (getProtection().automod && message.guild && message.member && !message.author.bot) {
+      if (!isProtectedStaff(message.member)) {
+        // Spam: too many messages in window
+        const prot = getProtection();
+        const sc = trackWindow(spamTracker, message.author.id, prot.spamWindowMs);
+        if (sc >= prot.spamMsgLimit) {
+          spamTracker.delete(message.author.id);
+          await message.delete().catch(() => {});
+          await message.member.timeout(prot.spamTimeoutMs, 'Auto-mod: spam').catch(() => {});
+          await message.channel.send(
+            `**${message.author.username}** timed out for spam.`
+          ).catch(() => {});
+          await protectionLog(
+            message.guild,
+            'Auto-mod · Spam',
+            `**User:** ${message.author.tag} (\`${message.author.id}\`)\n**Channel:** ${message.channel}`
+          );
+        } else {
+          // Bad words
+          const lower = (message.content || '').toLowerCase();
+          const hit = getProtection().badWords.find((w) => w && lower.includes(w));
+          if (hit) {
+            await message.delete().catch(() => {});
+            await message.channel.send(
+              `${message.author} message removed (filtered word).`
+            ).catch(() => {});
+            await protectionLog(
+              message.guild,
+              'Auto-mod · Filter',
+              `**User:** ${message.author.tag}\n**Channel:** ${message.channel}`
+            );
+          }
+          // Mass mentions (@everyone or 5+ users)
+          const mentionCount = message.mentions.users.size + (message.mentions.everyone ? 5 : 0);
+          if (mentionCount >= 5 || message.mentions.everyone) {
+            if (!message.member.permissions.has(PermissionFlagsBits.MentionEveryone)) {
+              await message.delete().catch(() => {});
+              await message.member.timeout(getProtection().spamTimeoutMs, 'Auto-mod: mass mention').catch(() => {});
+              await protectionLog(
+                message.guild,
+                'Auto-mod · Mass mention',
+                `**User:** ${message.author.tag}\n**Channel:** ${message.channel}`
+              );
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('automod:', e.message);
   }
 
   // ========== COUNTING CHANNEL ==========
@@ -4603,28 +4840,178 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     });
   }
 
-  // ========== -si server info ==========
+
+  // ========== -protection (saved in data, not env) ==========
+  if (cmd === 'protection' || cmd === 'automod' || cmd === 'security') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const sub = (args[0] || 'status').toLowerCase();
+    const p = getProtection();
+
+    if (sub === 'status' || sub === 'show') {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('Flare Protection')
+            .setDescription(
+              `**Auto-mod** · ${p.automod ? 'ON' : 'OFF'}\n` +
+                `**Anti-nuke** · ${p.antinuke ? 'ON' : 'OFF'}\n` +
+                `**Anti-raid** · ${p.antiraid !== false ? 'ON' : 'OFF'}\n` +
+                `**Log** · ${p.logChannelId ? `<#${p.logChannelId}>` : 'not set'}\n` +
+                `**Spam** · ${p.spamMsgLimit} / ${p.spamWindowMs / 1000}s\n` +
+                `**Join raid** · ${p.joinRaidLimit} / ${p.joinRaidWindowMs / 1000}s\n` +
+                `**Nuke** · ${p.nukeActionLimit} / ${p.nukeWindowMs / 1000}s\n` +
+                `**Bad words** · ${p.badWords.length}\n\n` +
+                `\`${PREFIX}protection automod on/off\`\n` +
+                `\`${PREFIX}protection antinuke on/off\`\n` +
+                `\`${PREFIX}protection log #channel\`\n` +
+                `\`${PREFIX}protection badword add|remove|list <word>\`\n` +
+                `\`${PREFIX}protection spam 6 5\``
+            )
+            .setFooter({ text: 'Stored in bot data · /api/protection' })
+        ]
+      });
+    }
+    if (sub === 'automod') {
+      const on = ['on', 'true', '1'].includes((args[1] || '').toLowerCase());
+      const off = ['off', 'false', '0'].includes((args[1] || '').toLowerCase());
+      if (!on && !off) return message.reply(`Usage: \`${PREFIX}protection automod on|off\``);
+      saveProtection({ automod: on });
+      return message.reply(`Auto-mod **${on ? 'ON' : 'OFF'}**`);
+    }
+    if (sub === 'antinuke') {
+      const on = ['on', 'true', '1'].includes((args[1] || '').toLowerCase());
+      const off = ['off', 'false', '0'].includes((args[1] || '').toLowerCase());
+      if (!on && !off) return message.reply(`Usage: \`${PREFIX}protection antinuke on|off\``);
+      saveProtection({ antinuke: on });
+      return message.reply(`Anti-nuke **${on ? 'ON' : 'OFF'}**`);
+    }
+    if (sub === 'antiraid') {
+      const on = ['on', 'true', '1'].includes((args[1] || '').toLowerCase());
+      const off = ['off', 'false', '0'].includes((args[1] || '').toLowerCase());
+      if (!on && !off) return message.reply(`Usage: \`${PREFIX}protection antiraid on|off\``);
+      saveProtection({ antiraid: on });
+      return message.reply(`Anti-raid **${on ? 'ON' : 'OFF'}**`);
+    }
+    if (sub === 'log') {
+      const ch = message.mentions.channels.first();
+      if (!ch) return message.reply(`Usage: \`${PREFIX}protection log #channel\``);
+      saveProtection({ logChannelId: ch.id });
+      return message.reply(`Log channel → ${ch}`);
+    }
+    if (sub === 'badword' || sub === 'badwords' || sub === 'filter') {
+      const act = (args[1] || '').toLowerCase();
+      const word = (args[2] || '').toLowerCase().trim();
+      if (act === 'list') return message.reply(p.badWords.length ? p.badWords.map((w) => `\`${w}\``).join(', ') : '(none)');
+      if (act === 'add' && word) {
+        if (!p.badWords.includes(word)) p.badWords.push(word);
+        saveProtection({ badWords: p.badWords });
+        return message.reply(`Added \`${word}\``);
+      }
+      if ((act === 'remove' || act === 'rm') && word) {
+        saveProtection({ badWords: p.badWords.filter((w) => w !== word) });
+        return message.reply(`Removed \`${word}\``);
+      }
+      return message.reply(`Usage: \`${PREFIX}protection badword add|remove|list <word>\``);
+    }
+    if (sub === 'spam') {
+      const count = parseInt(args[1], 10);
+      const secs = parseInt(args[2], 10);
+      if (!count || !secs) return message.reply(`Usage: \`${PREFIX}protection spam 6 5\``);
+      saveProtection({ spamMsgLimit: count, spamWindowMs: secs * 1000 });
+      return message.reply(`Spam: **${count}** / **${secs}s**`);
+    }
+    if (sub === 'joinraid') {
+      const count = parseInt(args[1], 10);
+      const secs = parseInt(args[2], 10);
+      if (!count || !secs) return message.reply(`Usage: \`${PREFIX}protection joinraid 8 15\``);
+      saveProtection({ joinRaidLimit: count, joinRaidWindowMs: secs * 1000 });
+      return message.reply(`Join raid: **${count}** / **${secs}s**`);
+    }
+    if (sub === 'nuke') {
+      const count = parseInt(args[1], 10);
+      const secs = parseInt(args[2], 10);
+      if (!count || !secs) return message.reply(`Usage: \`${PREFIX}protection nuke 3 20\``);
+      saveProtection({ nukeActionLimit: count, nukeWindowMs: secs * 1000 });
+      return message.reply(`Nuke: **${count}** / **${secs}s**`);
+    }
+    return message.reply(`Try \`${PREFIX}protection status\``);
+  }
+
+  // ========== -si server info (premium UI) ==========
   if (cmd === 'si' || cmd === 'serverinfo' || cmd === 'server') {
     const g = message.guild;
     const owner = await g.fetchOwner().catch(() => null);
-    return message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xbe2c71)
-          .setTitle(g.name)
-          .setThumbnail(g.iconURL({ size: 256 }))
-          .addFields(
-            { name: 'Owner', value: owner ? owner.user.username : '—', inline: true },
-            { name: 'Members', value: `${g.memberCount}`, inline: true },
-            { name: 'Channels', value: `${g.channels.cache.size}`, inline: true },
-            { name: 'Roles', value: `${g.roles.cache.size}`, inline: true },
-            { name: 'Created', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
-            { name: 'ID', value: g.id, inline: true }
-          )
-          .setFooter({ text: 'Flare · Server info' })
-          .setTimestamp()
-      ]
-    });
+    await g.members.fetch().catch(() => {});
+    const online = g.members.cache.filter(
+      (m) => !m.user.bot && m.presence && ['online', 'idle', 'dnd'].includes(m.presence.status)
+    ).size;
+    const bots = g.members.cache.filter((m) => m.user.bot).size;
+    const humans = Math.max(0, g.memberCount - bots);
+    const textCh = g.channels.cache.filter((c) => c.type === ChannelType.GuildText).size;
+    const voiceCh = g.channels.cache.filter((c) => c.type === ChannelType.GuildVoice).size;
+    const cats = g.channels.cache.filter((c) => c.type === ChannelType.GuildCategory).size;
+    const boost = g.premiumSubscriptionCount || 0;
+    const boostTier = ['None', 'Tier 1', 'Tier 2', 'Tier 3'];
+    const tier = boostTier[g.premiumTier] || 'None';
+    const verif = {
+      0: 'None',
+      1: 'Low',
+      2: 'Medium',
+      3: 'High',
+      4: 'Very High'
+    }[g.verificationLevel] || '—';
+
+    const embed = new EmbedBuilder()
+      .setColor(0xbe2c71)
+      .setAuthor({ name: g.name, iconURL: g.iconURL({ size: 128 }) || undefined })
+      .setTitle('Server information')
+      .setThumbnail(g.iconURL({ size: 256 }))
+      .setDescription(
+        `╭──────────────╮\n` +
+          `  **${g.name}**\n` +
+          `╰──────────────╯\n\n` +
+          (g.description ? `*${g.description.slice(0, 120)}*\n\n` : '')
+      )
+      .addFields(
+        {
+          name: 'General',
+          value:
+            `**Owner** · ${owner ? owner.user.username : '—'}\n` +
+            `**Created** · <t:${Math.floor(g.createdTimestamp / 1000)}:D>\n` +
+            `**ID** · \`${g.id}\`\n` +
+            `**Verification** · ${verif}`,
+          inline: true
+        },
+        {
+          name: 'Members',
+          value:
+            `**Total** · ${g.memberCount}\n` +
+            `**Humans** · ${humans}\n` +
+            `**Bots** · ${bots}\n` +
+            `**Online** · ${online || '—'}`,
+          inline: true
+        },
+        {
+          name: 'Structure',
+          value:
+            `**Channels** · ${g.channels.cache.size}\n` +
+            `**Text** · ${textCh} · **Voice** · ${voiceCh}\n` +
+            `**Categories** · ${cats}\n` +
+            `**Roles** · ${g.roles.cache.size}`,
+          inline: true
+        },
+        {
+          name: 'Boosts',
+          value: `**Level** · ${tier}\n**Boosts** · ${boost}`,
+          inline: true
+        }
+      )
+      .setImage(g.bannerURL({ size: 512 }) || null)
+      .setFooter({ text: 'Flare Drop · Server' })
+      .setTimestamp();
+
+    return message.reply({ embeds: [embed] });
   }
 
   // ========== -invites (Falcon-style) ==========
@@ -4760,7 +5147,7 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
   }
 
   // ========== -removeinvite @user [amount] ==========
-  if (cmd === 'removeinvite' || cmd === 'removeinvites' || cmd === 'rinv') {
+  if (cmd === 'removeinvite' || cmd === 'removeinvites' || cmd === 'rinv' || cmd === 'rmi') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const u = message.mentions.users.first();
     const amount = parseInt(args.find((a) => /^\d+$/.test(a)), 10) || 1;
@@ -5028,7 +5415,7 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
     }
 
     // Log
-    if (ANTIRAID_LOG_CHANNEL_ID) {
+    if (getProtection().logChannelId || ANTIRAID_LOG_CHANNEL_ID) {
       const logCh = newChannel.guild.channels.cache.get(ANTIRAID_LOG_CHANNEL_ID);
       if (logCh) {
         const embed = new EmbedBuilder()
@@ -5553,6 +5940,105 @@ client.on('interactionCreate', async (interaction) => {
       }
 
 
+      
+      if (name === 'protection') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const action = interaction.options.getString('action') || 'status';
+        if (action === 'automod_on') { saveProtection({ automod: true }); return reply({ content: 'Auto-mod **ON**' }); }
+        if (action === 'automod_off') { saveProtection({ automod: false }); return reply({ content: 'Auto-mod **OFF**' }); }
+        if (action === 'antinuke_on') { saveProtection({ antinuke: true }); return reply({ content: 'Anti-nuke **ON**' }); }
+        if (action === 'antinuke_off') { saveProtection({ antinuke: false }); return reply({ content: 'Anti-nuke **OFF**' }); }
+        const p = getProtection();
+        return reply({
+          embeds: [new EmbedBuilder().setColor(0x57f287).setTitle('Flare Protection').setDescription(
+            `Auto-mod **${p.automod ? 'ON' : 'OFF'}** · Anti-nuke **${p.antinuke ? 'ON' : 'OFF'}**\nLog: ${p.logChannelId ? `<#${p.logChannelId}>` : '—'}\nBad words: ${p.badWords.length}`
+          )]
+        });
+      }
+      if (name === 'si' || name === 'serverinfo') {
+        const g = interaction.guild;
+        const owner = await g.fetchOwner().catch(() => null);
+        return reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xbe2c71)
+              .setAuthor({ name: g.name, iconURL: g.iconURL({ size: 128 }) || undefined })
+              .setTitle('Server information')
+              .setThumbnail(g.iconURL({ size: 256 }))
+              .addFields(
+                { name: 'Owner', value: owner ? owner.user.username : '—', inline: true },
+                { name: 'Members', value: `${g.memberCount}`, inline: true },
+                { name: 'Channels', value: `${g.channels.cache.size}`, inline: true },
+                { name: 'Roles', value: `${g.roles.cache.size}`, inline: true },
+                { name: 'ID', value: g.id, inline: true }
+              )
+          ]
+        });
+      }
+      if (name === 'm') {
+        const u = interaction.options.getUser('user') || interaction.user;
+        const n = data.messages?.[interaction.guildId]?.[u.id] || 0;
+        return reply({ content: `**${u.username}** has **${n.toLocaleString()}** messages.` });
+      }
+      if (name === 'i') {
+        const u = interaction.options.getUser('user') || interaction.user;
+        return reply({ embeds: [buildFalconInviteEmbed(u, interaction.guildId)] });
+      }
+      if (name === 'rmi') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const u = interaction.options.getUser('user', true);
+        const amount = interaction.options.getInteger('amount') || 1;
+        const gid = interaction.guildId;
+        const s = ensureInviteStats(gid, u.id);
+        s.joins = Math.max(0, (s.joins || 0) - amount);
+        if (!data.invites[gid]) data.invites[gid] = {};
+        data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+        saveData();
+        return reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+      }
+      if (name === 'lock') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false }).catch(() => {});
+        return reply({ content: 'Channel locked.' });
+      }
+      if (name === 'unlock') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: null }).catch(() => {});
+        return reply({ content: 'Channel unlocked.' });
+      }
+      if (name === 'slowmode') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const sec = interaction.options.getInteger('seconds', true);
+        await interaction.channel.setRateLimitPerUser(sec).catch(() => {});
+        return reply({ content: sec ? `Slowmode **${sec}s**` : 'Slowmode off.' });
+      }
+      if (name === 'purge') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const amount = interaction.options.getInteger('amount', true);
+        const deleted = await interaction.channel.bulkDelete(amount, true).catch(() => null);
+        return reply({ content: `Deleted **${deleted?.size || 0}** messages.`, ephemeral: true });
+      }
+      if (name === 'nick') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const u = interaction.options.getUser('user', true);
+        const nick = interaction.options.getString('nickname');
+        const mem = await interaction.guild.members.fetch(u.id).catch(() => null);
+        if (!mem) return reply({ content: 'Member not found.', ephemeral: true });
+        await mem.setNickname(nick || null).catch(() => null);
+        return reply({ content: `Nickname updated for **${u.username}**.` });
+      }
+      if (name === 'role') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const act = interaction.options.getString('action', true);
+        const u = interaction.options.getUser('user', true);
+        const role = interaction.options.getRole('role', true);
+        const mem = await interaction.guild.members.fetch(u.id).catch(() => null);
+        if (!mem) return reply({ content: 'Member not found.', ephemeral: true });
+        if (act === 'add') await mem.roles.add(role).catch(() => null);
+        else await mem.roles.remove(role).catch(() => null);
+        return reply({ content: `${act === 'add' ? 'Added' : 'Removed'} **${role.name}** ${act === 'add' ? 'to' : 'from'} **${u.username}**.` });
+      }
+
       if (name === 'flare') {
         const action = interaction.options.getString('action') || 'balance';
         const target = interaction.options.getUser('user') || interaction.user;
@@ -5884,5 +6370,63 @@ client.on('interactionCreate', async (interaction) => {
     console.error('interaction', e);
   }
 });
+
+
+// Anti-nuke: mass channel delete
+client.on('channelDelete', async (channel) => {
+  try {
+    if (!getProtection().antinuke || !channel.guild) return;
+    const logs = await channel.guild.fetchAuditLogs({ type: 12, limit: 1 }).catch(() => null); // ChannelDelete
+    const entry = logs?.entries?.first();
+    if (!entry || Date.now() - entry.createdTimestamp > 10000) return;
+    const executor = entry.executor;
+    if (!executor || executor.bot || executor.id === channel.guild.ownerId) return;
+    const member = await channel.guild.members.fetch(executor.id).catch(() => null);
+    if (isProtectedStaff(member) && isCoOwnerOrAbove(member)) return;
+    const protN = getProtection();
+    const n = trackWindow(nukeTracker, `${executor.id}:chdel`, protN.nukeWindowMs);
+    if (n >= protN.nukeActionLimit) {
+      if (member) {
+        await member.roles.set([], 'Anti-nuke: mass channel delete').catch(() => {});
+        await member.timeout(MASS_PING_TIMEOUT_MS, 'Anti-nuke: mass channel delete').catch(() => {});
+      }
+      await protectionLog(
+        channel.guild,
+        'Anti-nuke · Channel delete',
+        `**Executor:** ${executor.tag} (\`${executor.id}\`)\n**Count:** ${n} in window\n**Action:** roles stripped + timeout`
+      );
+    }
+  } catch (e) {
+    console.error('channelDelete nuke:', e.message);
+  }
+});
+
+client.on('guildBanAdd', async (ban) => {
+  try {
+    if (!getProtection().antinuke) return;
+    const logs = await ban.guild.fetchAuditLogs({ type: 22, limit: 1 }).catch(() => null); // MemberBanAdd
+    const entry = logs?.entries?.first();
+    if (!entry || Date.now() - entry.createdTimestamp > 10000) return;
+    const executor = entry.executor;
+    if (!executor || executor.bot || executor.id === ban.guild.ownerId) return;
+    const protN = getProtection();
+    const n = trackWindow(nukeTracker, `${executor.id}:ban`, protN.nukeWindowMs);
+    if (n >= protN.nukeActionLimit) {
+      const member = await ban.guild.members.fetch(executor.id).catch(() => null);
+      if (member && !isCoOwnerOrAbove(member)) {
+        await member.roles.set([], 'Anti-nuke: mass ban').catch(() => {});
+        await member.timeout(MASS_PING_TIMEOUT_MS, 'Anti-nuke: mass ban').catch(() => {});
+      }
+      await protectionLog(
+        ban.guild,
+        'Anti-nuke · Mass ban',
+        `**Executor:** ${executor.tag}\n**Banned:** ${ban.user.tag}\n**Count:** ${n}`
+      );
+    }
+  } catch (e) {
+    console.error('guildBanAdd nuke:', e.message);
+  }
+});
+
 
 client.login(TOKEN);
