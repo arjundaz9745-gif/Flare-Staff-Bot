@@ -4587,8 +4587,48 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     return message.reply(`Welcome channel set to ${ch}. (Also set WELCOME_CHANNEL_ID in env for reboot persistence.)`);
   }
 
+
+  // ========== -m messages count ==========
+  if (cmd === 'm' || cmd === 'messages' || cmd === 'msgcount') {
+    const u = message.mentions.users.first() || message.author;
+    const n = data.messages?.[message.guild.id]?.[u.id] || 0;
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setAuthor({ name: u.username, iconURL: u.displayAvatarURL({ size: 128 }) })
+          .setDescription(`**${u.username}** has **${n.toLocaleString()}** messages tracked.`)
+          .setFooter({ text: 'Flare · Messages' })
+      ]
+    });
+  }
+
+  // ========== -si server info ==========
+  if (cmd === 'si' || cmd === 'serverinfo' || cmd === 'server') {
+    const g = message.guild;
+    const owner = await g.fetchOwner().catch(() => null);
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setTitle(g.name)
+          .setThumbnail(g.iconURL({ size: 256 }))
+          .addFields(
+            { name: 'Owner', value: owner ? owner.user.username : '—', inline: true },
+            { name: 'Members', value: `${g.memberCount}`, inline: true },
+            { name: 'Channels', value: `${g.channels.cache.size}`, inline: true },
+            { name: 'Roles', value: `${g.roles.cache.size}`, inline: true },
+            { name: 'Created', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
+            { name: 'ID', value: g.id, inline: true }
+          )
+          .setFooter({ text: 'Flare · Server info' })
+          .setTimestamp()
+      ]
+    });
+  }
+
   // ========== -invites (Falcon-style) ==========
-  if (cmd === 'invites' || cmd === 'inv' || cmd === 'invite') {
+  if (cmd === 'invites' || cmd === 'inv' || cmd === 'invite' || cmd === 'i') {
     const sub = (args[0] || '').toLowerCase();
     const gid = message.guild.id;
 
@@ -4760,7 +4800,7 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     const kind = (args[0] || 'messages').toLowerCase();
     const gid = message.guild.id;
 
-    if (kind === 'invites' || kind === 'invite' || kind === 'inv') {
+    if (kind === 'invites' || kind === 'invite' || kind === 'inv' || kind === 'i') {
       const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
       const rows = Object.keys(stats)
         .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
