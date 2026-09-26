@@ -381,3 +381,128 @@ if (gateBtn) gateBtn.addEventListener('click', function () { doPasswordLogin(); 
 var gatePw = document.getElementById('gatePassword');
 if (gatePw) gatePw.addEventListener('keydown', function (e) { if (e.key === 'Enter') doPasswordLogin(); });
 boot().catch(function () {});
+
+
+/* ===== Protection / Invites / Moderation ===== */
+async function loadProtection() {
+  const msg = document.getElementById('protMsg');
+  try {
+    const r = await api('/api/protection');
+    const p = r.protection || {};
+    document.getElementById('protAutomod').checked = !!p.automod;
+    document.getElementById('protAntinuke').checked = !!p.antinuke;
+    document.getElementById('protAntiraid').checked = p.antiraid !== false;
+    document.getElementById('protLog').value = p.logChannelId || '';
+    document.getElementById('protSpamCount').value = p.spamMsgLimit ?? 6;
+    document.getElementById('protSpamSecs').value = Math.round((p.spamWindowMs || 5000) / 1000);
+    document.getElementById('protJoinCount').value = p.joinRaidLimit ?? 8;
+    document.getElementById('protJoinSecs').value = Math.round((p.joinRaidWindowMs || 15000) / 1000);
+    document.getElementById('protNukeCount').value = p.nukeActionLimit ?? 3;
+    document.getElementById('protNukeSecs').value = Math.round((p.nukeWindowMs || 20000) / 1000);
+    document.getElementById('protBadWords').value = (p.badWords || []).join(', ');
+    if (msg) msg.textContent = 'Loaded.';
+  } catch (e) {
+    if (msg) msg.textContent = 'Failed to load protection.';
+  }
+}
+
+async function saveProtection() {
+  const msg = document.getElementById('protMsg');
+  const bad = (document.getElementById('protBadWords').value || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const body = {
+    automod: document.getElementById('protAutomod').checked,
+    antinuke: document.getElementById('protAntinuke').checked,
+    antiraid: document.getElementById('protAntiraid').checked,
+    logChannelId: (document.getElementById('protLog').value || '').trim(),
+    spamMsgLimit: parseInt(document.getElementById('protSpamCount').value, 10) || 6,
+    spamWindowMs: (parseInt(document.getElementById('protSpamSecs').value, 10) || 5) * 1000,
+    joinRaidLimit: parseInt(document.getElementById('protJoinCount').value, 10) || 8,
+    joinRaidWindowMs: (parseInt(document.getElementById('protJoinSecs').value, 10) || 15) * 1000,
+    nukeActionLimit: parseInt(document.getElementById('protNukeCount').value, 10) || 3,
+    nukeWindowMs: (parseInt(document.getElementById('protNukeSecs').value, 10) || 20) * 1000,
+    badWords: bad
+  };
+  try {
+    await api('/api/protection', { method: 'POST', body: JSON.stringify(body) });
+    if (msg) msg.textContent = 'Saved.';
+  } catch (e) {
+    if (msg) msg.textContent = 'Save failed.';
+  }
+}
+
+async function loadInvitesDash() {
+  const el = document.getElementById('invitesOut');
+  if (!el) return;
+  try {
+    const r = await api('/api/invites');
+    const rows = r.top || [];
+    if (!rows.length) {
+      el.innerHTML = '<p class="muted">No invite data yet. Tracking starts when members join with invites.</p>';
+      return;
+    }
+    el.innerHTML =
+      '<table class="table"><thead><tr><th>#</th><th>User</th><th>Total</th><th>Joins</th><th>Leaves</th><th>Bonus</th></tr></thead><tbody>' +
+      rows
+        .map(
+          (x, i) =>
+            `<tr><td>${i + 1}</td><td>${escapeHtml(x.name || x.id)}</td><td><b>${x.total}</b></td><td>${x.joins}</td><td>${x.leaves}</td><td>${x.bonus}</td></tr>`
+        )
+        .join('') +
+      '</tbody></table>';
+  } catch (e) {
+    el.innerHTML = '<p class="muted">Could not load invites (API).</p>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+document.getElementById('btnProtSave')?.addEventListener('click', saveProtection);
+document.getElementById('btnInvitesRefresh')?.addEventListener('click', loadInvitesDash);
+document.getElementById('btnModWarn')?.addEventListener('click', () => {
+  if (typeof loadWarnings === 'function') loadWarnings();
+  else {
+    const el = document.getElementById('modOut');
+    if (el) el.innerHTML = '<p class="muted">Open Warnings tab or refresh after deploy.</p>';
+  }
+});
+
+/* hook tab switches */
+(function hookTabs() {
+  const orig = window.showTab || window.switchTab;
+  document.querySelectorAll('[data-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const t = btn.getAttribute('data-tab');
+      if (t === 'protection') loadProtection();
+      if (t === 'invites') loadInvitesDash();
+      if (t === 'moderation') {
+        const el = document.getElementById('modOut');
+        if (el && typeof loadWarnings === 'function') {
+          // reuse warnings into modOut if possible
+          api('/api/warnings')
+            .then((r) => {
+              const users = r.users || r.warnings || [];
+              if (!users.length) {
+                el.innerHTML = '<p class="muted">No warnings stored.</p>';
+                return;
+              }
+              el.innerHTML = users
+                .slice(0, 30)
+                .map((u) => `<div class="card"><b>${escapeHtml(u.userId)}</b> — ${u.count || 0} warn(s)</div>`)
+                .join('');
+            })
+            .catch(() => {
+              el.innerHTML = '<p class="muted">No warnings API data.</p>';
+            });
+        }
+      }
+    });
+  });
+})();

@@ -54,6 +54,9 @@
         <button type="button" data-tab="giveaways" class="nav-item">Giveaways</button>
         <button type="button" data-tab="warnings" class="nav-item">Warnings</button>
         <button type="button" data-tab="economy" class="nav-item">Economy</button>
+        <button type="button" data-tab="protection" class="nav-item">Protection</button>
+        <button type="button" data-tab="invites" class="nav-item">Invites</button>
+        <button type="button" data-tab="moderation" class="nav-item">Moderation</button>
         <button type="button" data-tab="settings" class="nav-item">Settings</button>
       </nav>
       <a class="btn ghost logout" href="/auth/logout">Logout</a>
@@ -147,7 +150,69 @@
         </div>
       </section>
 
-      <section id="tab-settings" class="panel hidden">
+      
+      <section id="tab-protection" class="panel hidden">
+        <h2>Protection</h2>
+        <p class="hint">Saved in bot data (not env). Same as <code>-protection</code> in Discord.</p>
+        <div class="card form-card">
+          <div class="row toggles">
+            <label class="toggle"><input type="checkbox" id="protAutomod" /> Auto-mod (spam / filter / mass mention)</label>
+            <label class="toggle"><input type="checkbox" id="protAntinuke" /> Anti-nuke</label>
+            <label class="toggle"><input type="checkbox" id="protAntiraid" /> Anti-raid</label>
+          </div>
+          <label>Log channel ID</label>
+          <input id="protLog" type="text" placeholder="Channel ID for protection logs" />
+          <label>Spam: max messages</label>
+          <input id="protSpamCount" type="number" min="2" max="30" />
+          <label>Spam: window (seconds)</label>
+          <input id="protSpamSecs" type="number" min="1" max="60" />
+          <label>Join raid: max joins</label>
+          <input id="protJoinCount" type="number" min="3" max="50" />
+          <label>Join raid: window (seconds)</label>
+          <input id="protJoinSecs" type="number" min="5" max="120" />
+          <label>Nuke: max actions</label>
+          <input id="protNukeCount" type="number" min="2" max="20" />
+          <label>Nuke: window (seconds)</label>
+          <input id="protNukeSecs" type="number" min="5" max="120" />
+          <label>Bad words (comma-separated)</label>
+          <textarea id="protBadWords" rows="3" placeholder="word1, word2"></textarea>
+          <button type="button" class="btn primary" id="btnProtSave">Save protection</button>
+          <p id="protMsg" class="hint"></p>
+        </div>
+      </section>
+
+      <section id="tab-invites" class="panel hidden">
+        <h2>Invites</h2>
+        <p class="hint">Falcon-style tracking. Manage in Discord with <code>-i</code> / <code>-invites</code>.</p>
+        <div class="toolbar">
+          <button type="button" class="btn" id="btnInvitesRefresh">Refresh top</button>
+        </div>
+        <div class="card" id="invitesOut">Loading…</div>
+      </section>
+
+      <section id="tab-moderation" class="panel hidden">
+        <h2>Moderation</h2>
+        <p class="hint">Warnings list + quick notes. Use Discord for ban/kick/timeout.</p>
+        <div class="toolbar">
+          <button type="button" class="btn" id="btnModWarn">Refresh warnings</button>
+        </div>
+        <div class="card" id="modOut">Loading…</div>
+        <div class="card form-card">
+          <h3>Slash &amp; prefix cheat sheet</h3>
+          <ul class="cheats">
+            <li><code>-lock</code> / <code>/lock</code> — lock channel</li>
+            <li><code>-unlock</code> / <code>/unlock</code></li>
+            <li><code>/purge</code> — bulk delete</li>
+            <li><code>/slowmode</code> — slowmode</li>
+            <li><code>/nick</code> <code>/role</code> — nickname &amp; roles</li>
+            <li><code>-si</code> — server info</li>
+            <li><code>-leaderboard m</code> / <code>i</code> — message / invite LB</li>
+            <li><code>-rmi @user</code> — remove invites</li>
+          </ul>
+        </div>
+      </section>
+
+<section id="tab-settings" class="panel hidden">
         <h2>Settings</h2>
         <div class="card form-card">
           <h3>Background blur</h3>
