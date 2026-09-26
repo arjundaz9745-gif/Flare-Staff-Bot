@@ -1981,6 +1981,58 @@ function parseDuration(str) {
   const u = m[2].toLowerCase();
   return n * ({ s: 1000, m: 60000, h: 3600000, d: 86400000 }[u] || 0);
 }
+function buildGiveawayLiveEmbed(g, hostTag) {
+  const ends = Math.floor((g.ends || Date.now()) / 1000);
+  const entries = (g.entries || []).length;
+  return new EmbedBuilder()
+    .setColor(0xf1c40f)
+    .setAuthor({ name: 'Flare Drop · Giveaway' })
+    .setTitle('GIVEAWAY')
+    .setDescription(
+      `╭──────────────────╮\n` +
+        `   **${g.prize}**\n` +
+        `╰──────────────────╯\n\n` +
+        `**Winners** · \`${g.winners || 1}\`\n` +
+        `**Entries** · \`${entries}\`\n` +
+        `**Ends** · <t:${ends}:R> (<t:${ends}:f>)\n` +
+        (hostTag ? `**Hosted by** · ${hostTag}\n` : '') +
+        `\nClick **Enter** below to join.`
+    )
+    .setFooter({ text: 'Good luck · Flare Drop' })
+    .setTimestamp(g.ends || Date.now());
+}
+
+function buildGiveawayEndedEmbed(g, winners, reroll = false) {
+  const entries = [...new Set(g.entries || [])].length;
+  const winnerLine = winners.length
+    ? winners.map((id, i) => `**${i + 1}.** <@${id}>`).join('\n')
+    : '_No valid entries — no winners._';
+  return new EmbedBuilder()
+    .setColor(winners.length ? 0x57f287 : 0xed4245)
+    .setAuthor({ name: reroll ? 'Flare Drop · Reroll' : 'Flare Drop · Ended' })
+    .setTitle(reroll ? 'GIVEAWAY REROLLED' : 'GIVEAWAY ENDED')
+    .setDescription(
+      `╭──────────────────╮\n` +
+        `   **${g.prize}**\n` +
+        `╰──────────────────╯\n\n` +
+        `**Winners**\n${winnerLine}\n\n` +
+        `**Total entries** · \`${entries}\`\n` +
+        `**Drawn** · <t:${Math.floor(Date.now() / 1000)}:f>`
+    )
+    .setFooter({
+      text: winners.length ? 'Congratulations · Flare Drop' : 'Better luck next time · Flare Drop'
+    })
+    .setTimestamp();
+}
+
+function giveawayButtons(disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('gw_join').setLabel('Enter').setEmoji('🎉').setStyle(ButtonStyle.Success).setDisabled(disabled),
+    new ButtonBuilder().setCustomId('gw_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+    new ButtonBuilder().setCustomId('gw_entries').setLabel('Entries').setStyle(ButtonStyle.Primary).setDisabled(disabled)
+  );
+}
+
 async function endGiveaway(messageId, reroll = false) {
   const g = data.giveaways?.[messageId];
   if (!g) return;
@@ -1991,19 +2043,36 @@ async function endGiveaway(messageId, reroll = false) {
   const pool = entries.slice();
   const count = Math.min(g.winners || 1, pool.length);
   for (let i = 0; i < count; i++) {
+    if (!pool.length) break;
     const idx = Math.floor(Math.random() * pool.length);
     winners.push(pool.splice(idx, 1)[0]);
   }
-  const text = winners.length
-    ? `🎉 **Giveaway ended!** Prize: **${g.prize}**\nWinners: ${winners.map((id) => `<@${id}>`).join(', ')}`
-    : `🎉 **Giveaway ended!** No valid entries for **${g.prize}**.`;
-  await ch.send(text).catch(() => {});
-  if (!reroll) {
-    try {
-      const msg = await ch.messages.fetch(messageId);
-      await msg.edit({ components: [] }).catch(() => {});
-    } catch (_) {}
-  }
+  g.ended = true;
+  g.winnerIds = winners;
+  saveData();
+  const endEmbed = buildGiveawayEndedEmbed(g, winners, reroll);
+  const ping = winners.length ? winners.map((id) => `<@${id}>`).join(' ') : null;
+  try {
+    const msg = await ch.messages.fetch(messageId).catch(() => null);
+    if (msg) {
+      await msg.edit({ embeds: [endEmbed], components: [giveawayButtons(true)] }).catch(() => {});
+    }
+  } catch (_) {}
+  await ch.send({
+    content: ping ? `${reroll ? '**Reroll!**' : '**Giveaway ended!**'} ${ping}` : undefined,
+    embeds: [
+      new EmbedBuilder()
+        .setColor(winners.length ? 0xf1c40f : 0x95a5a6)
+        .setTitle(reroll ? 'New winner(s) drawn' : 'Thanks for entering')
+        .setDescription(
+          winners.length
+            ? `Prize: **${g.prize}**\n\nPlease open a ticket or wait for staff to deliver your reward.`
+            : `Prize **${g.prize}** had no entries.`
+        )
+        .setFooter({ text: 'Flare Drop · Giveaways' })
+        .setTimestamp()
+    ]
+  }).catch(() => {});
 }
 
 async function takeFromStock(productKey, amount, pool = 'normal') {
@@ -4456,18 +4525,7 @@ ${message.author}'s **staff application is ready** — please review.`
     const ms = parseDuration(timeRaw);
     if (!ms || ms < 10000) return message.reply('Bad time. Use 10m, 1h, 1d');
     const ends = Date.now() + ms;
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('gw_join').setLabel('🎉 Join').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('gw_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary)
-    );
-    const emb = new EmbedBuilder()
-      .setColor(0xbe2c71)
-      .setTitle('🎉 GIVEAWAY')
-      .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(ends/1000)}:R>\n\nClick **Join** to enter!`)
-      .setFooter({ text: 'Flare Drop' });
-    const msg = await message.channel.send({ embeds: [emb], components: [row] });
-    if (!data.giveaways) data.giveaways = {};
-    data.giveaways[msg.id] = {
+    const gObj = {
       channelId: message.channel.id,
       prize,
       winners,
@@ -4475,6 +4533,10 @@ ${message.author}'s **staff application is ready** — please review.`
       hostId: message.author.id,
       entries: []
     };
+    const emb = buildGiveawayLiveEmbed(gObj, message.author.toString());
+    const msg = await message.channel.send({ embeds: [emb], components: [giveawayButtons(false)] });
+    if (!data.giveaways) data.giveaways = {};
+    data.giveaways[msg.id] = gObj;
     saveData();
     setTimeout(() => endGiveaway(msg.id).catch(() => {}), ms);
     return;
@@ -5568,19 +5630,50 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      if (id === 'gw_join' || id === 'gw_leave') {
+      if (id === 'gw_join' || id === 'gw_leave' || id === 'gw_entries') {
         const g = data.giveaways?.[interaction.message.id];
-        if (!g) return interaction.reply({ content: 'Giveaway ended.', ephemeral: true });
+        if (!g || g.ended) {
+          return interaction.reply({ content: 'This giveaway has ended.', ephemeral: true });
+        }
         if (!g.entries) g.entries = [];
         const uid = interaction.user.id;
+
+        if (id === 'gw_entries') {
+          return interaction.reply({
+            content: `**${g.entries.length}** entr${g.entries.length === 1 ? 'y' : 'ies'} for **${g.prize}**.`,
+            ephemeral: true
+          });
+        }
+
         if (id === 'gw_join') {
-          if (!g.entries.includes(uid)) g.entries.push(uid);
+          if (g.entries.includes(uid)) {
+            return interaction.reply({ content: 'You already entered.', ephemeral: true });
+          }
+          g.entries.push(uid);
           saveData();
-          return interaction.reply({ content: 'Joined! 🎉', ephemeral: true });
+          try {
+            const host = g.hostId ? `<@${g.hostId}>` : null;
+            await interaction.message.edit({
+              embeds: [buildGiveawayLiveEmbed(g, host)],
+              components: [giveawayButtons(false)]
+            }).catch(() => {});
+          } catch (_) {}
+          return interaction.reply({ content: 'You entered the giveaway. Good luck!', ephemeral: true });
+        }
+
+        if (!g.entries.includes(uid)) {
+          return interaction.reply({ content: 'You are not in this giveaway.', ephemeral: true });
         }
         g.entries = g.entries.filter((x) => x !== uid);
         saveData();
-        return interaction.reply({ content: 'Left giveaway.', ephemeral: true });
+        try {
+          const host = g.hostId ? `<@${g.hostId}>` : null;
+          await interaction.message.edit({
+            embeds: [buildGiveawayLiveEmbed(g, host)],
+            components: [giveawayButtons(false)]
+          }).catch(() => {});
+        } catch (_) {}
+        return interaction.reply({ content: 'You left the giveaway.', ephemeral: true });
       }
     }
     if (interaction.isChatInputCommand()) {
@@ -5605,18 +5698,19 @@ client.on('interactionCreate', async (interaction) => {
         const ms = parseDuration(timeRaw);
         if (!ms) return reply({ content: 'Bad time', ephemeral: true });
         const ends = Date.now() + ms;
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('gw_join').setLabel('🎉 Join').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('gw_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary)
-        );
-        const emb = new EmbedBuilder()
-          .setColor(0xbe2c71)
-          .setTitle('🎉 GIVEAWAY')
-          .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Ends:** <t:${Math.floor(ends/1000)}:R>`);
-        await reply({ embeds: [emb], components: [row] });
+        const gObj = {
+          channelId: interaction.channelId,
+          prize,
+          winners,
+          ends,
+          hostId: interaction.user.id,
+          entries: []
+        };
+        const emb = buildGiveawayLiveEmbed(gObj, interaction.user.toString());
+        await reply({ embeds: [emb], components: [giveawayButtons(false)] });
         const msg = await interaction.fetchReply();
         if (!data.giveaways) data.giveaways = {};
-        data.giveaways[msg.id] = { channelId: interaction.channelId, prize, winners, ends, hostId: interaction.user.id, entries: [] };
+        data.giveaways[msg.id] = gObj;
         saveData();
         setTimeout(() => endGiveaway(msg.id).catch(() => {}), ms);
         return;
