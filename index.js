@@ -25,14 +25,14 @@ const {
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
-const PREFIX = process.env.PREFIX || '$';
+const PREFIX = process.env.PREFIX || '-';
 const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID || '1540362727581818947';
 const FLARE_GUILD_ID = process.env.GUILD_ID || process.env.FLARE_GUILD_ID || '1540362727514701894';
 const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
 
 const PORT = process.env.PORT || 3000;
 
-// Staff role hierarchy for $staffstats (highest first)
+// Staff role hierarchy for -staffstats (highest first)
 const OWNER_ROLE_ID = process.env.OWNER_ROLE_ID || '1540362727514701895'; // foundz.exe / Owner
 const CO_OWNER_ROLE_ID = process.env.CO_OWNER_ROLE_ID || '1540615105039827065'; // Ownz
 const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID || '1540362727514701898'; // Maneger
@@ -56,21 +56,45 @@ const MASS_PING_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 // Product stock keys (Ultimate multi-stock)
 const PRODUCT_STOCKS = {
-  // original finite stock
-  mcfa: { label: 'MCFA', emoji: '🟩', cmd: ['mcfa'], type: 'stock' },
-  nitro: { label: 'NITRO', emoji: '💜', cmd: ['nitro'], type: 'stock' },
-  netflix: { label: 'NETFLIX', emoji: '🎬', cmd: ['netflix'], type: 'stock' },
-  crunchyroll: { label: 'CRUNCHYROLL', emoji: '🍥', cmd: ['crunchyroll', 'cruncyroll', 'cr'], type: 'stock' },
-  steam: { label: 'STEAM', emoji: '🎮', cmd: ['steam'], type: 'stock' },
-  // new = full methods (unlimited same text)
-  mcredeem: { label: 'McRedeem Code', emoji: '🎟️', cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
-  mccode: { label: 'McCode Method', emoji: '📜', cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
-  xbox: { label: 'Xbox Codes', emoji: '🎮', cmd: ['xbox', 'xboxcodes', 'xboxcode'], type: 'method' },
-  xboxmethod: { label: 'XboxCode Method', emoji: '📘', cmd: ['xboxmethod', 'xboxcodemethod'], type: 'method' },
-  nitromethod: { label: 'Nitro Method', emoji: '💎', cmd: ['nitromethod', 'nitrom'], type: 'method' },
-  xboxgift: { label: 'Xbox Gift Card Method', emoji: '🎁', cmd: ['xboxgift', 'xboxgiftcard', 'xboxgiftmethod'], type: 'method' },
-  netflixnocc: { label: 'Netflix Method NoCC', emoji: '📺', cmd: ['netflixnocc', 'netflixmethod', 'nfnocc'], type: 'method' }
+  // emojiNames = your server custom emoji names (case-insensitive). Bot resolves <:name:id> live.
+  mcfa: { label: 'MCFA', emoji: '🟩', emojiNames: ['MINECRAFT', 'minecraft', 'mcfa'], cmd: ['mcfa'], type: 'stock' },
+  donut: { label: 'DONUT', emoji: '🍩', emojiNames: ['donut', 'Donut'], cmd: ['donut'], type: 'stock' },
+  hypixel: { label: 'HYPIXEL', emoji: '⚔️', emojiNames: ['hypixel', 'Hypixel'], cmd: ['hypixel', 'hyp'], type: 'stock' },
+  nitro: { label: 'NITRO', emoji: '💜', emojiNames: ['Nitro', 'nitro'], cmd: ['nitro'], type: 'stock' },
+  netflix: { label: 'NETFLIX', emoji: '🎬', emojiNames: ['netflix', 'Netflix'], cmd: ['netflix'], type: 'stock' },
+  crunchyroll: { label: 'CRUNCHYROLL', emoji: '🍥', emojiNames: ['crunchyroll', 'Crunchyroll'], cmd: ['crunchyroll', 'cruncyroll', 'cr'], type: 'stock' },
+  steam: { label: 'STEAM', emoji: '🎮', emojiNames: ['STEAM', 'steam', 'Steam'], cmd: ['steam'], type: 'stock' },
+  xbox: { label: 'XBOX', emoji: '🎮', emojiNames: ['xbox', 'Xbox', 'XBOX'], cmd: ['xbox', 'xboxcodes', 'xboxcode'], type: 'stock' },
+  // methods
+  mcredeem: { label: 'McRedeem Code', emoji: '🎟️', emojiNames: ['MINECRAFT', 'minecraft'], cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
+  mccode: { label: 'McCode Method', emoji: '📜', emojiNames: ['MINECRAFT', 'minecraft'], cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
+  xboxmethod: { label: 'XboxCode Method', emoji: '📘', emojiNames: ['xbox', 'Xbox'], cmd: ['xboxmethod', 'xboxcodemethod'], type: 'method' },
+  nitromethod: { label: 'Nitro Method', emoji: '💎', emojiNames: ['Nitro', 'nitro'], cmd: ['nitromethod', 'nitrom'], type: 'method' },
+  xboxgift: { label: 'Xbox Gift Card Method', emoji: '🎁', emojiNames: ['xbox', 'Xbox'], cmd: ['xboxgift', 'xboxgiftcard', 'xboxgiftmethod'], type: 'method' },
+  netflixnocc: { label: 'Netflix Method NoCC', emoji: '📺', emojiNames: ['netflix', 'Netflix'], cmd: ['netflixnocc', 'netflixmethod', 'nfnocc'], type: 'method' }
 };
+
+/** Resolve server custom emoji by name, else fallback unicode */
+function stockEmoji(guild, meta) {
+  const fallback = (meta && meta.emoji) || '•';
+  if (!guild || !guild.emojis || !meta) return fallback;
+  const names = meta.emojiNames || [];
+  for (const name of names) {
+    const found = guild.emojis.cache.find(
+      (em) => em.name && em.name.toLowerCase() === String(name).toLowerCase()
+    );
+    if (found) return found.toString(); // <:name:id> or <a:name:id>
+  }
+  // also try product key / label
+  for (const name of [meta.label, ...(meta.cmd || [])]) {
+    const found = guild.emojis.cache.find(
+      (em) => em.name && em.name.toLowerCase() === String(name).toLowerCase()
+    );
+    if (found) return found.toString();
+  }
+  return fallback;
+}
+
 
 const VOUCH_CHANNEL_ID = process.env.VOUCH_CHANNEL_ID || ''; // disabled for Flare
 const PROOF_CHANNEL_ID = process.env.PROOF_CHANNEL_ID || ''; // disabled for Flare
@@ -151,19 +175,23 @@ function resolveProductKey(name) {
   return null;
 }
 
-function buildStockListEmbed() {
+function buildStockListEmbed(guild) {
   ensureStocks(data);
-  const lines = Object.entries(PRODUCT_STOCKS).map(([key, meta]) => {
-    const n = (data.stocks[key] || []).length;
-    return `${meta.emoji} **${meta.label}**  |  \`${n}\``;
-  });
+  const lines = Object.entries(PRODUCT_STOCKS)
+    .filter(([, meta]) => meta.type !== 'method')
+    .map(([key, meta]) => {
+      const n = (data.stocks[key] || []).length;
+      const icon = stockEmoji(guild, meta);
+      return `${icon} **${meta.label}**  |  \`${n}\``;
+    });
   return new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle('📦 CURRENT STOCK STATUS')
-    .setDescription(lines.join('\n'))
-    .setFooter({ text: 'USE $BUY <PRODUCT> OR $PAY / $<product> @user — Flare Drop' })
+    .setColor(0xbe2c71)
+    .setTitle('CURRENT STOCK STATUS')
+    .setDescription(lines.join('\n') || 'No stock products configured.')
+    .setFooter({ text: 'USE -buy <product> OR -pay / -<product> @user — Flare Drop' })
     .setTimestamp();
 }
+
 
 function isTicketChannel(ch) {
   if (!ch || !ch.name) return false;
@@ -658,8 +686,8 @@ function buildTeamupPanel(team) {
       `**People in the team:** \`${count}/20\`\n` +
       `**Status:** ${statusEmoji} **${statusText}**\n\n` +
       `**Members**\n${memberLines}\n\n` +
-      `\`$leave\` — leave this TeamUp\n` +
-      `\`$close\` — close & delete (creator/staff)`
+      `\`-leave\` — leave this TeamUp\n` +
+      `\`-close\` — close & delete (creator/staff)`
     )
     .setFooter({ text: 'Flare Drop • TeamUp' })
     .setTimestamp();
@@ -934,7 +962,7 @@ async function startRewardClaimFlow(channel, user) {
 
   collector.on('end', async (_, reason) => {
     if (reason !== 'chosen') {
-      await channel.send(`${user} Reward selection timed out. Use \`$claim\` to try again.`).catch(() => {});
+      await channel.send(`${user} Reward selection timed out. Use \`-claim\` to try again.`).catch(() => {});
     }
   });
 }
@@ -1245,7 +1273,7 @@ async function createSupportTicket(guild, user, reason) {
     .setDescription(
       `Hello ${user}!\n\nStaff will help you soon.\n` +
         (reason ? `**Reason:** ${reason}\n` : '') +
-        `\nClose: \`$close\` or the button below.`
+        `\nClose: \`-close\` or the button below.`
     )
     .setFooter({ text: 'Flare Drop · Tickets' })
     .setTimestamp();
@@ -1317,8 +1345,32 @@ async function onReady() {
         .addAttachmentOption(o => o.setName('banner').setDescription('Optional banner image under the panel').setRequired(false)),
       new SlashCommandBuilder().setName('setwelcome').setDescription('Set welcome channel (staff)')
         .addChannelOption(o => o.setName('channel').setDescription('Welcome channel').setRequired(true)),
-      new SlashCommandBuilder().setName('invites').setDescription('Show invite count')
-        .addUserOption(o => o.setName('user').setDescription('User (optional)')),
+      new SlashCommandBuilder().setName('invites').setDescription('Invites (Falcon-style)')
+        .addStringOption(o =>
+          o.setName('action').setDescription('view | top | reset | remove | add | bonus')
+            .addChoices(
+              { name: 'view', value: 'view' },
+              { name: 'top', value: 'top' },
+              { name: 'reset', value: 'reset' },
+              { name: 'reset_all', value: 'reset_all' },
+              { name: 'remove', value: 'remove' },
+              { name: 'add', value: 'add' },
+              { name: 'bonus', value: 'bonus' }
+            )
+        )
+        .addUserOption(o => o.setName('user').setDescription('User (for view/reset/remove/add/bonus)'))
+        .addIntegerOption(o => o.setName('amount').setDescription('Amount for remove/add/bonus').setMinValue(1)),
+      new SlashCommandBuilder().setName('removeinvite').setDescription('Remove invite joins from a user (staff)')
+        .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setDescription('How many (default 1)').setMinValue(1)),
+      new SlashCommandBuilder().setName('leaderboard').setDescription('Message or invite leaderboard')
+        .addStringOption(o =>
+          o.setName('type').setDescription('messages or invites')
+            .addChoices(
+              { name: 'messages', value: 'messages' },
+              { name: 'invites', value: 'invites' }
+            )
+        ),
       new SlashCommandBuilder().setName('clear').setDescription('Clear MCFA pay stock (staff)'),
       new SlashCommandBuilder().setName('ban').setDescription('Ban a member')
         .addUserOption(o => o.setName('user').setDescription('User to ban').setRequired(true))
@@ -1539,7 +1591,7 @@ async function exportStockToChannel(message, kind, lines, label) {
     message.channel;
 
   if (!ch || !ch.isTextBased?.()) {
-    return message.reply('Mention a text channel: `$mcfa export #channel`');
+    return message.reply('Mention a text channel: `-mcfa export #channel`');
   }
 
   if (!data.exportCounts) data.exportCounts = { mcfa: 0, custom: 0, hits: 0 };
@@ -1619,7 +1671,7 @@ function ultimateFaqReply(text) {
 
   if (/(invite|reward|claim|milestone)/i.test(q)) {
     return (
-      "Create a **permanent invite**, invite real friends, hit a milestone, then open a ticket and use **`$claim`** (or follow the ticket bot) to pick your reward.\n" +
+      "Create a **permanent invite**, invite real friends, hit a milestone, then open a ticket and use **`-claim`** (or follow the ticket bot) to pick your reward.\n" +
       "Fake/J4J invites don't count."
     );
   }
@@ -1651,7 +1703,7 @@ function ultimateFaqReply(text) {
     "• Website: https://flaredrop.base44.app\n" +
     "• Products: MCFA / NFA / SFA & more\n" +
     "• Help: open a **ticket**\n" +
-    "• Staff tools: `$help`\n\n" +
+    "• Staff tools: `-help`\n\n" +
     "Try asking about website, MCFA, tickets, invites, or prices. I can't help with bot-making or illegal stuff."
   );
 }
@@ -1987,7 +2039,7 @@ client.on('messageCreate', async (message) => {
   const cmd = (args.shift() || '').toLowerCase();
   if (!cmd) return;
 
-  // ========== $best @role ==========
+  // ========== -best @role ==========
   if (cmd === 'best') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -1996,7 +2048,7 @@ client.on('messageCreate', async (message) => {
       message.guild.roles.cache.get((args[0] || '').replace(/[<@&>]/g, ''));
 
     if (!role) {
-      return message.reply('Usage: `$best @role`');
+      return message.reply('Usage: `-best @role`');
     }
 
     try {
@@ -2036,21 +2088,21 @@ client.on('messageCreate', async (message) => {
     return message.reply({ embeds: [embed] });
   }
 
-  // ========== $mcfa / $stock ==========
-  // $mcfa              → show stock count (staff)
-  // $mcfa list         → paste available as ||mail:pass|| (staff, in channel)
-  // $mcfa add ...      → add accounts (staff)
-  // $stock ...         → same aliases
+  // ========== -mcfa / -stock ==========
+  // -mcfa              → show stock count (staff)
+  // -mcfa list         → paste available as ||mail:pass|| (staff, in channel)
+  // -mcfa add ...      → add accounts (staff)
+  // -stock ...         → same aliases
   if (cmd === 'stock') {
     if (!canViewStock(message.member)) return message.reply('Members / staff only.');
     const sub = (args[0] || '').toLowerCase();
     if (!sub || sub === 'list' || sub === 'status') {
-      return message.reply({ embeds: [buildStockListEmbed()] });
+      return message.reply({ embeds: [buildStockListEmbed(message.guild)] });
     }
-    return message.reply('`$stock list` — show all product stock counts');
+    return message.reply('`-stock list` — show all product stock counts');
   }
 
-  // Generic product stock: $mcfa / $crunchyroll / $xbox / $netflix / $hypixel / $donut / $nitro / $steam
+  // Generic product stock: -mcfa / -crunchyroll / -xbox / -netflix / -hypixel / -donut / -nitro / -steam
   if (resolveProductKey(cmd) && cmd !== 'custom') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const productKey = resolveProductKey(cmd);
@@ -2171,7 +2223,7 @@ client.on('messageCreate', async (message) => {
 
     if (sub === 'list' || sub === 'paste') {
       if (!data.mcfaStock.length) {
-        return message.reply('No MCFA stock left. Add with `$mcfa add mail:pass`');
+        return message.reply('No MCFA stock left. Add with `-mcfa add mail:pass`');
       }
       // Discord message limit ~2000 — batch
       const spoilers = data.mcfaStock.map((a) => `||${a}||`);
@@ -2196,7 +2248,7 @@ client.on('messageCreate', async (message) => {
       const accounts = parseAccounts(rest);
       if (!accounts.length) {
         return message.reply(
-          'Usage:\n`$mcfa add mail:pass`\n`$mcfa add mail:pass mail:pass`\nOnly valid domains (outlook.fr, gmail, …) are stored.'
+          'Usage:\n`-mcfa add mail:pass`\n`-mcfa add mail:pass mail:pass`\nOnly valid domains (outlook.fr, gmail, …) are stored.'
         );
       }
       let added = 0;
@@ -2230,21 +2282,21 @@ if (sub === 'clear') {
 
     return message.reply(
       'MCFA commands (staff):\n' +
-        '`$mcfa` — stock count\n' +
-        '`$mcfa list` — paste all as ||mail:pass||\n' +
-        '`$mcfa add mail:pass` — add stock\n' +
-        '`$mcfa clear` / `$clear` — clear stock\n' +
-        '`$mcfa export #channel` — export stock as export_N.txt\n' +
-        '`$pay @user [n]` — DM MCFA\n' +
-        '`$salary @user [n]` — salary (restricted)'
+        '`-mcfa` — stock count\n' +
+        '`-mcfa list` — paste all as ||mail:pass||\n' +
+        '`-mcfa add mail:pass` — add stock\n' +
+        '`-mcfa clear` / `-clear` — clear stock\n' +
+        '`-mcfa export #channel` — export stock as export_N.txt\n' +
+        '`-pay @user [n]` — DM MCFA\n' +
+        '`-salary @user [n]` — salary (restricted)'
     );
   }
 
-  // ========== $pay @user [product] [amount] ==========
-  // $pay @user → 1 mcfa
-  // $pay @user 5 → 5 mcfa
-  // $pay @user netflix 2 → 2 netflix
-  // $crunchyroll @user 1 also works via product cmds below
+  // ========== -pay @user [product] [amount] ==========
+  // -pay @user → 1 mcfa
+  // -pay @user 5 → 5 mcfa
+  // -pay @user netflix 2 → 2 netflix
+  // -crunchyroll @user 1 also works via product cmds below
   if (cmd === 'pay') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -2254,7 +2306,7 @@ if (sub === 'clear') {
 
     if (!user || user.bot) {
       return message.reply(
-        'Usage: `$pay @user` · `$pay @user 5` · `$pay @user netflix 2`\n' +
+        'Usage: `-pay @user` · `-pay @user 5` · `-pay @user netflix 2`\n' +
           'Products: mcfa, donut, hypixel, nitro, netflix, steam, crunchyroll, xbox, custom'
       );
     }
@@ -2292,10 +2344,10 @@ if (sub === 'clear') {
     );
   }
 
-  // ========== $salary @user [amount] ==========
+  // ========== -salary @user [amount] ==========
   // Only usable by user ID 1398979148063571989 or members with role 1547183159794204675
   if (cmd === 'salary') {
-    // $salary add — owners only, locked channel
+    // -salary add — owners only, locked channel
     if ((args[0] || '').toLowerCase() === 'add') {
       const allowed =
         message.author.id === BIRTHDAY_USER_ID || isCoOwnerOrAbove(message.member);
@@ -2304,7 +2356,7 @@ if (sub === 'clear') {
         return message.reply(`Use this only in <#${SALARY_ADD_CHANNEL_ID}>.`);
       }
       const rest = body.slice(body.toLowerCase().indexOf('add') + 3).trim();
-      if (!rest) return message.reply('Usage: `$salary add email:pass`');
+      if (!rest) return message.reply('Usage: `-salary add email:pass`');
       const items = parseAccounts(rest).length
         ? parseAccounts(rest)
         : rest.split(/\n+/).map((s) => s.trim()).filter(Boolean);
@@ -2341,7 +2393,7 @@ if (sub === 'clear') {
       (args[0] && (await client.users.fetch(args[0].replace(/[<@!>]/g, '')).catch(() => null)));
 
     if (!user || user.bot) {
-      return message.reply('Usage: `$salary @user` or `$salary @user 3`');
+      return message.reply('Usage: `-salary @user` or `-salary @user 3`');
     }
 
     let amount = 1;
@@ -2399,7 +2451,7 @@ if (sub === 'clear') {
     }
   }
 
-  // ========== $clear ==========
+  // ========== -clear ==========
   // Shortcut to clear MCFA stock
   if (cmd === 'clear') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -2409,7 +2461,7 @@ if (sub === 'clear') {
     return message.reply(`Cleared **${n}** from MCFA stock.`);
   }
 
-  // ========== $online @role ==========
+  // ========== -online @role ==========
   if (cmd === 'online') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -2418,7 +2470,7 @@ if (sub === 'clear') {
       message.guild.roles.cache.get((args[0] || '').replace(/[<@&>]/g, ''));
 
     if (!role) {
-      return message.reply('Usage: `$online @role`');
+      return message.reply('Usage: `-online @role`');
     }
 
     try {
@@ -2455,7 +2507,7 @@ if (sub === 'clear') {
     return message.reply({ embeds: [embed] });
   }
 
-  // ========== $custom (custom stock system) ==========
+  // ========== -custom (custom stock system) ==========
   if (cmd === 'custom') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -2469,7 +2521,7 @@ if (sub === 'clear') {
 
     if (sub === 'list' || sub === 'paste') {
       if (!data.customStock.length) {
-        return message.reply('No custom stock left. Add with `$custom add <text>`');
+        return message.reply('No custom stock left. Add with `-custom add <text>`');
       }
       const spoilers = data.customStock.map((a) => `||${a}||`);
       const chunks = [];
@@ -2491,7 +2543,7 @@ if (sub === 'clear') {
     if (sub === 'add') {
       const rest = body.slice(body.toLowerCase().indexOf('add') + 3).trim();
       if (!rest) {
-        return message.reply('Usage: `$custom add <any text>`');
+        return message.reply('Usage: `-custom add <any text>`');
       }
       // allow multiple lines / items separated by newlines
       const items = rest
@@ -2524,17 +2576,17 @@ if (sub === 'clear') {
 
     return message.reply(
       'Custom commands (staff):\n' +
-        '`$custom` — stock count\n' +
-        '`$custom list` — paste all as spoilers\n' +
-        '`$custom add <text>` — add item(s)\n' +
-        '`$custom clear` — clear custom stock\n' +
-        '`$custom export #channel` — export as export_N.txt\n' +
-        '`$custompay @user` — DM 1 item\n' +
-        '`$custompay @role` — DM 1 to role members'
+        '`-custom` — stock count\n' +
+        '`-custom list` — paste all as spoilers\n' +
+        '`-custom add <text>` — add item(s)\n' +
+        '`-custom clear` — clear custom stock\n' +
+        '`-custom export #channel` — export as export_N.txt\n' +
+        '`-custompay @user` — DM 1 item\n' +
+        '`-custompay @role` — DM 1 to role members'
     );
   }
 
-  // ========== $custompay @user  OR  $custompay @role ==========
+  // ========== -custompay @user  OR  -custompay @role ==========
   // If a role is given → sends 1 item to EVERY member in that role
   if (cmd === 'custompay') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -2609,12 +2661,12 @@ if (sub === 'clear') {
     // ---------- USER MODE ----------
     if (!user || user.bot) {
       return message.reply(
-        'Usage:\n`$custompay @user` — send 1 item to one user\n`$custompay @role` — send 1 item to every member in the role'
+        'Usage:\n`-custompay @user` — send 1 item to one user\n`-custompay @role` — send 1 item to every member in the role'
       );
     }
 
     if (!data.customStock.length) {
-      return message.reply('No custom stock left. Add with `$custom add <text>`');
+      return message.reply('No custom stock left. Add with `-custom add <text>`');
     }
 
     const item = data.customStock.shift();
@@ -2646,25 +2698,25 @@ if (sub === 'clear') {
   }
 
 
-  // ========== $ultimate (economy) ==========
-  // $ultimate                 → show your balance
-  // $ultimate @user           → show someone's balance
-  // $ultimate add <amt> [@user] → add coins (Owner/Co-Owner)
-  // $ultimate give/send @user <amt> → transfer coins
-  // $ultimate cf <amt> <head|tail> → coin flip
-  // $ultimate daily           → claim daily reward
-  // $ultimate top             → richest users
+  // ========== -ultimate (economy) ==========
+  // -ultimate                 → show your balance
+  // -ultimate @user           → show someone's balance
+  // -ultimate add <amt> [@user] → add coins (Owner/Co-Owner)
+  // -ultimate give/send @user <amt> → transfer coins
+  // -ultimate cf <amt> <head|tail> → coin flip
+  // -ultimate daily           → claim daily reward
+  // -ultimate top             → richest users
   if (cmd === 'flare' || cmd === 'ultimate' || cmd === 'economy') {
     const sub = (args[0] || '').toLowerCase();
 
-    // ---- $ultimate add <amount> [@user] ----
+    // ---- -ultimate add <amount> [@user] ----
     if (sub === 'add') {
       if (!isCoOwnerOrAbove(message.member)) {
         return message.reply('Only **Owner** and **Co-Owner** can add coins.');
       }
       const amount = parseInt(args[1], 10);
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$flare add <amount> [@user]`');
+        return message.reply('Usage: `-flare add <amount> [@user]`');
       }
       let target = message.mentions.users.first();
       if (!target && args[2]) {
@@ -2686,7 +2738,7 @@ if (sub === 'clear') {
       return message.reply({ embeds: [embed] });
     }
 
-    // ---- $ultimate give / send @user <amount> ----
+    // ---- -ultimate give / send @user <amount> ----
     if (sub === 'give' || sub === 'send') {
       const target =
         message.mentions.users.first() ||
@@ -2695,7 +2747,7 @@ if (sub === 'clear') {
       // amount can be args[1] or args[2] depending on whether mention is used
       let amount = parseInt(args[1], 10);
       if (message.mentions.users.first()) {
-        amount = parseInt(args[1], 10); // $ultimate give @user 100  → args = ['give', '100'] after shift? 
+        amount = parseInt(args[1], 10); // -ultimate give @user 100  → args = ['give', '100'] after shift? 
         // actually after cmd shift, args[0]=give, args[1]=maybe id or amount
       }
       // Better parse: find the number in remaining args
@@ -2703,10 +2755,10 @@ if (sub === 'clear') {
       amount = numArg ? parseInt(numArg, 10) : NaN;
 
       if (!target || target.bot) {
-        return message.reply('Usage: `$flare give @user <amount>`');
+        return message.reply('Usage: `-flare give @user <amount>`');
       }
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$flare give @user <amount>`');
+        return message.reply('Usage: `-flare give @user <amount>`');
       }
       if (target.id === message.author.id) {
         return message.reply("You can't give coins to yourself.");
@@ -2732,16 +2784,16 @@ if (sub === 'clear') {
       return message.reply({ embeds: [embed] });
     }
 
-    // ---- $ultimate cf <amount> <head|tail> ----
+    // ---- -ultimate cf <amount> <head|tail> ----
     if (sub === 'cf' || sub === 'coinflip') {
       const amount = parseInt(args[1], 10);
       const choice = (args[2] || '').toLowerCase();
 
       if (!amount || amount < 1) {
-        return message.reply('Usage: `$flare cf <amount> <head|tail>`');
+        return message.reply('Usage: `-flare cf <amount> <head|tail>`');
       }
       if (!['head', 'heads', 'h', 'tail', 'tails', 't'].includes(choice)) {
-        return message.reply('Choose **head** or **tail**.\nExample: `$flare cf 100 head`');
+        return message.reply('Choose **head** or **tail**.\nExample: `-flare cf 100 head`');
       }
 
       const bal = getCoins(message.author.id);
@@ -2772,7 +2824,7 @@ if (sub === 'clear') {
       return message.reply({ embeds: [embed] });
     }
 
-    // ---- $ultimate daily ----
+    // ---- -ultimate daily ----
     if (sub === 'daily') {
       const uid = message.author.id;
       const now = Date.now();
@@ -2802,7 +2854,7 @@ if (sub === 'clear') {
       return message.reply({ embeds: [embed] });
     }
 
-    // ---- $ultimate top ----
+    // ---- -ultimate top ----
     if (sub === 'top' || sub === 'lb' || sub === 'leaderboard') {
       const entries = Object.entries(data.coins || {})
         .map(([id, bal]) => ({ id, bal: bal || 0 }))
@@ -2835,7 +2887,7 @@ if (sub === 'clear') {
       return message.reply({ embeds: [embed] });
     }
 
-    // ---- $ultimate  or  $ultimate @user  → show balance ----
+    // ---- -ultimate  or  -ultimate @user  → show balance ----
     let target = message.mentions.users.first();
     if (!target && args[0] && !['add', 'cf', 'coinflip', 'give', 'send', 'daily', 'top', 'lb', 'leaderboard'].includes(sub)) {
       target = await client.users.fetch(args[0].replace(/[<@!>]/g, '')).catch(() => null);
@@ -2856,7 +2908,7 @@ if (sub === 'clear') {
     return message.reply({ embeds: [embed] });
   }
 
-  // ========== $count #channel ==========
+  // ========== -count #channel ==========
   // Staff only — enable / disable / status counting in a channel
   if (cmd === 'count') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -2870,11 +2922,11 @@ if (sub === 'clear') {
         : null) ||
       message.channel;
 
-    // $count status / $count  (current channel)
+    // -count status / -count  (current channel)
     if (!sub || sub === 'status' || sub === 'info') {
       const info = data.counting[channel.id];
       if (!info) {
-        return message.reply(`Counting is **not active** in ${channel}.\nEnable with \`$count ${channel}\``);
+        return message.reply(`Counting is **not active** in ${channel}.\nEnable with \`-count ${channel}\``);
       }
       return message.reply(
         `**Counting in ${channel}**\n` +
@@ -2884,7 +2936,7 @@ if (sub === 'clear') {
       );
     }
 
-    // $count off / stop / disable
+    // -count off / stop / disable
     if (['off', 'stop', 'disable'].includes(sub)) {
       const target =
         message.mentions.channels.first() ||
@@ -2898,7 +2950,7 @@ if (sub === 'clear') {
       return message.reply(`Counting was not active in ${target}.`);
     }
 
-    // $count reset
+    // -count reset
     if (sub === 'reset') {
       const target =
         message.mentions.channels.first() ||
@@ -2912,7 +2964,7 @@ if (sub === 'clear') {
       return message.reply(`Counting **reset to 0** in ${target}. Next number is **1**.`);
     }
 
-    // $count #channel  → enable
+    // -count #channel  → enable
     if (channel.type !== 0 && channel.type !== 5) { // GuildText or GuildAnnouncement
       return message.reply('Please mention a text channel.');
     }
@@ -2929,7 +2981,7 @@ if (sub === 'clear') {
   }
 
 
-  // ========== $team <game> ... ==========
+  // ========== -team <game> ... ==========
   // LFG announcement for supported games
   if (cmd === 'team') {
     const gameRaw = (args[0] || '').toLowerCase();
@@ -2961,16 +3013,16 @@ if (sub === 'clear') {
     if (!game) {
       return message.reply(
         '**Supported games:**\n' +
-        '`$team minecraft <ip:port> <1-5min>`\n' +
-        '`$team pubg <in-game id> <1-5min>`\n' +
-        '`$team bgmi <in-game id> <1-5min>`\n' +
-        '`$team freefire <in-game id> <1-5min>`\n' +
-        '`$team amongus <lobby code> <1-10min>`'
+        '`-team minecraft <ip:port> <1-5min>`\n' +
+        '`-team pubg <in-game id> <1-5min>`\n' +
+        '`-team bgmi <in-game id> <1-5min>`\n' +
+        '`-team freefire <in-game id> <1-5min>`\n' +
+        '`-team amongus <lobby code> <1-10min>`'
       );
     }
 
     if (rest.length < 2) {
-      return message.reply(`Usage: \`$team ${gameKey} <info> <time>\``);
+      return message.reply(`Usage: \`-team ${gameKey} <info> <time>\``);
     }
 
     const timeStr = rest[rest.length - 1].toLowerCase().replace(/min(ute)?s?/, '');
@@ -3001,13 +3053,13 @@ if (sub === 'clear') {
     return message.reply({ embeds: [embed] });
   }
 
-  // ========== $teamup @user(s) ==========
+  // ========== -teamup @user(s) ==========
   // Creates a private temporary channel for the group (max 20) with live panel
   if (cmd === 'teamup') {
     const targets = [...message.mentions.users.values()].filter((u) => !u.bot && u.id !== message.author.id);
 
     if (!targets.length) {
-      return message.reply('Usage: `$teamup @user1 @user2 ...` (mention who you want to play with)');
+      return message.reply('Usage: `-teamup @user1 @user2 ...` (mention who you want to play with)');
     }
     if (targets.length > 19) {
       return message.reply('Max **20** people total (you + 19 others).');
@@ -3054,7 +3106,7 @@ if (sub === 'clear') {
         name: channelName,
         type: ChannelType.GuildText,
         permissionOverwrites: overwrites,
-        topic: `TeamUp by ${message.author.username} | $close to close | $leave to leave`,
+        topic: `TeamUp by ${message.author.username} | -close to close | -leave to leave`,
         reason: `TeamUp created by ${message.author.tag}`
       };
       if (TEAMUP_CATEGORY_ID) createOpts.parent = TEAMUP_CATEGORY_ID;
@@ -3087,7 +3139,7 @@ if (sub === 'clear') {
     }
   }
 
-  // ========== $close / $leave (inside TeamUp channels) ==========
+  // ========== -close / -leave (inside TeamUp channels) ==========
   if (cmd === 'close' || cmd === 'leave') {
     const ch = message.channel;
     if (!ch.name?.startsWith('teamup-')) {
@@ -3113,7 +3165,7 @@ if (sub === 'clear') {
       return;
     }
 
-    // $close
+    // -close
     const isCreator = team
       ? team.creatorId === message.author.id
       : ch.name.includes(message.author.username.toLowerCase().replace(/[^a-z0-9]/g, ''));
@@ -3140,17 +3192,17 @@ if (sub === 'clear') {
   }
 
 
-  // ========== $claim ==========
+  // ========== -claim ==========
   // In a ticket: show eligible rewards based on invites, then ping online staff
   if (cmd === 'claim') {
     if (!isTicketChannel(message.channel)) {
-      return message.reply('`$claim` only works **inside tickets**.');
+      return message.reply('`-claim` only works **inside tickets**.');
     }
     await startRewardClaimFlow(message.channel, message.author);
     return;
   }
 
-  // ========== $staffstats ==========
+  // ========== -staffstats ==========
   if (cmd === 'staffstats') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -3281,9 +3333,9 @@ if (sub === 'clear') {
   }
 
 
-  // ========== $format email:pass (format + domain only — NO login) ==========
-  // $format a:b c:d     → check only
-  // $format add a:b     → check + add valid ones to MCFA stock
+  // ========== -format email:pass (format + domain only — NO login) ==========
+  // -format a:b c:d     → check only
+  // -format add a:b     → check + add valid ones to MCFA stock
   if (cmd === 'format' || cmd === 'emailcheck') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -3291,8 +3343,8 @@ if (sub === 'clear') {
     if (!rest) {
       return message.reply(
         'Usage:\n' +
-          '`$format email:pass` — check only\n' +
-          '`$format add email:pass` — check + **add valid to stock**\n' +
+          '`-format email:pass` — check only\n' +
+          '`-format add email:pass` — check + **add valid to stock**\n' +
           'Multiple accounts OK. Accepts `outlook.fr`, `hotmail.es`, etc.\n' +
           'Does **not** try to log in.'
       );
@@ -3304,7 +3356,7 @@ if (sub === 'clear') {
       : rest;
     const accounts = parseAccounts(listText);
     if (!accounts.length) {
-      return message.reply('No `email:pass` found. Example: `$format add user@outlook.fr:Pass123!`');
+      return message.reply('No `email:pass` found. Example: `-format add user@outlook.fr:Pass123!`');
     }
 
     const valid = [];
@@ -3362,7 +3414,7 @@ if (sub === 'clear') {
 
 
 
-  // ========== $hit (Ultimate — blue embed UI) ==========
+  // ========== -hit (Ultimate — blue embed UI) ==========
   function buildHitEmbed(hit) {
     const hyp = hit.hypixel || 'Not Available';
     const don = hit.donut || 'Not Available';
@@ -3454,16 +3506,16 @@ if (sub === 'clear') {
     const sub = (args[0] || '').toLowerCase();
 
     if (sub === 'start') {
-      if (hitRunner.running) return message.reply('Already running. `$hit stop` first.');
+      if (hitRunner.running) return message.reply('Already running. `-hit stop` first.');
       if (!(data.hits || []).length) {
-        return message.reply('Queue empty. `$hit add hypixel email:pass` or `$hit add donut email:pass`');
+        return message.reply('Queue empty. `-hit add hypixel email:pass` or `-hit add donut email:pass`');
       }
       hitRunner.running = true;
       hitRunner.channelId = message.channel.id;
       hitRunner.index = 0;
       hitRunner.queue = [...data.hits];
       await message.reply(
-        `🚀 **Hit run started** — **${hitRunner.queue.length}** hit(s), **5s** apart.\n\`$hit stop\` to cancel.`
+        `🚀 **Hit run started** — **${hitRunner.queue.length}** hit(s), **5s** apart.\n\`-hit stop\` to cancel.`
       );
       runNextHit();
       return;
@@ -3522,16 +3574,16 @@ if (sub === 'clear') {
     }
 
     if (sub === 'add') {
-      // $hit add hypixel email:pass ...
-      // $hit add donut email:pass ...
-      // $hit add both email:pass ...
+      // -hit add hypixel email:pass ...
+      // -hit add donut email:pass ...
+      // -hit add both email:pass ...
       const kind = (args[1] || '').toLowerCase();
       if (!['hypixel', 'hyp', 'donut', 'both', 'all'].includes(kind)) {
         return message.reply(
           'Usage:\n' +
-            '`$hit add hypixel email:pass:Username`\n' +
-            '`$hit add donut email:pass:Username`\n' +
-            '`$hit add both email:pass` (username optional for skin)'
+            '`-hit add hypixel email:pass:Username`\n' +
+            '`-hit add donut email:pass:Username`\n' +
+            '`-hit add both email:pass` (username optional for skin)'
         );
       }
       const rest = body.slice(body.toLowerCase().indexOf(kind) + kind.length).trim();
@@ -3550,7 +3602,7 @@ if (sub === 'clear') {
         return message.reply(
           'No entries found.\n' +
             'Format: `email:pass` or `email:pass:MCUsername`\n' +
-            'Example: `$hit add hypixel a@b.com:Secret1:Steve`'
+            'Example: `-hit add hypixel a@b.com:Secret1:Steve`'
         );
       }
       let hyp = 'Not Available';
@@ -3583,18 +3635,18 @@ if (sub === 'clear') {
 
     return message.reply(
       '**Hits**\n' +
-        '`$hit add hypixel email:pass ...`\n' +
-        '`$hit add donut email:pass ...`\n' +
-        '`$hit add both email:pass ...`\n' +
-        '`$hit list` · `$hit start` · `$hit stop` · `$hit export` · `$hit clear`'
+        '`-hit add hypixel email:pass ...`\n' +
+        '`-hit add donut email:pass ...`\n' +
+        '`-hit add both email:pass ...`\n' +
+        '`-hit list` · `-hit start` · `-hit stop` · `-hit export` · `-hit clear`'
     );
   }
 
 
 
-  // ========== $daily (Head Admin+) ==========
-  // $daily @role [n]     — randomly pick n members from role, ping command user
-  // $daily pay @user     — 5–8s spin UI → custom ~65% / MCFA ~35% → DM + vouch warning
+  // ========== -daily (Head Admin+) ==========
+  // -daily @role [n]     — randomly pick n members from role, ping command user
+  // -daily pay @user     — 5–8s spin UI → custom ~65% / MCFA ~35% → DM + vouch warning
   if (cmd === 'daily') {
     if (!isHeadAdminOrAbove(message.member)) {
       return message.reply('Head Admin or above only.');
@@ -3602,7 +3654,7 @@ if (sub === 'clear') {
 
     const sub = (args[0] || '').toLowerCase();
 
-    // ---- $daily pay @user ----
+    // ---- -daily pay @user ----
     if (sub === 'pay') {
       const user =
         message.mentions.users.first() ||
@@ -3610,7 +3662,7 @@ if (sub === 'clear') {
           (await client.users.fetch(args[1].replace(/[<@!>]/g, '')).catch(() => null)));
 
       if (!user || user.bot) {
-        return message.reply('Usage: `$daily pay @user`');
+        return message.reply('Usage: `-daily pay @user`');
       }
 
       ensureStocks(data);
@@ -3677,7 +3729,7 @@ if (sub === 'clear') {
       return;
     }
 
-    // ---- $daily @role [n] ----
+    // ---- -daily @role [n] ----
     const role =
       message.mentions.roles.first() ||
       message.guild.roles.cache.get((args[0] || '').replace(/[<@&>]/g, ''));
@@ -3685,8 +3737,8 @@ if (sub === 'clear') {
     if (!role) {
       return message.reply(
         'Usage:\n' +
-          '`$daily @role 5` — pick **5** random members from role (pings you)\n' +
-          '`$daily pay @user` — spin daily reward (Custom 65% / MCFA 35%)'
+          '`-daily @role 5` — pick **5** random members from role (pings you)\n' +
+          '`-daily pay @user` — spin daily reward (Custom 65% / MCFA 35%)'
       );
     }
 
@@ -3734,14 +3786,14 @@ if (sub === 'clear') {
 
 
 
-  // ========== $birthday gift send @user (owner only) ==========
+  // ========== -birthday gift send @user (owner only) ==========
   if (cmd === 'birthday') {
     if (message.author.id !== BIRTHDAY_USER_ID) {
       return message.reply('Only the designated owner can use birthday gifts.');
     }
     const sub = (args[0] || '').toLowerCase();
     if (sub !== 'gift') {
-      return message.reply('Usage: `$birthday gift @user` or `$birthday gift send @user`');
+      return message.reply('Usage: `-birthday gift @user` or `-birthday gift send @user`');
     }
     const user =
       message.mentions.users.first() ||
@@ -3752,7 +3804,7 @@ if (sub === 'clear') {
       (args[1] && (await client.users.fetch(args[1].replace(/[<@!>]/g, '')).catch(() => null)));
 
     if (!user || user.bot) {
-      return message.reply('Usage: `$birthday gift @user`');
+      return message.reply('Usage: `-birthday gift @user`');
     }
 
     // Prefer custom, else any available stock
@@ -3776,7 +3828,7 @@ if (sub === 'clear') {
     );
   }
 
-  // ========== $staff apply / OPEN / CLOSED ==========
+  // ========== -staff apply / OPEN / CLOSED ==========
   if (cmd === 'staff') {
     const sub = (args[0] || '').toLowerCase();
 
@@ -3798,7 +3850,7 @@ if (sub === 'clear') {
 
       // user applying
       if (!isTicketChannel(message.channel)) {
-        return message.reply('`$staff apply` only works **inside a ticket**.');
+        return message.reply('`-staff apply` only works **inside a ticket**.');
       }
       if (!data.staffApplyOpen) {
         return message.reply('**Staff apply is currently closed !**');
@@ -3835,7 +3887,7 @@ if (sub === 'clear') {
           })
           .catch(() => null);
         if (!collected || !collected.size) {
-          await message.channel.send('Timed out. Run `$staff apply` again when ready.');
+          await message.channel.send('Timed out. Run `-staff apply` again when ready.');
           return;
         }
         const ans = collected.first().content.trim();
@@ -3877,14 +3929,14 @@ ${message.author}'s **staff application is ready** — please review.`
     }
 
     return message.reply(
-      '`$staff apply` — apply in a ticket\n' +
-        '`$staff apply OPEN` / `$staff apply CLOSED` — staff toggle'
+      '`-staff apply` — apply in a ticket\n' +
+        '`-staff apply OPEN` / `-staff apply CLOSED` — staff toggle'
     );
   }
 
 
 
-  // ========== $settings export / import (messages + invites backup) ==========
+  // ========== -settings export / import (messages + invites backup) ==========
   if (cmd === 'settings' || cmd === 'setting' || cmd === 'settungs') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const sub = (args[0] || '').toLowerCase();
@@ -3897,7 +3949,7 @@ ${message.author}'s **staff application is ready** — please review.`
         message.channel;
 
       if (!ch || !ch.isTextBased?.()) {
-        return message.reply('Usage: `$settings export #channel`');
+        return message.reply('Usage: `-settings export #channel`');
       }
 
       if (!data.exportCounts) data.exportCounts = { mcfa: 0, custom: 0, hits: 0, settings: 0 };
@@ -3927,7 +3979,7 @@ ${message.author}'s **staff application is ready** — please review.`
           `📤 **Settings export** \`${filename}\`\n` +
           `Messages users: **${Object.keys(payload.messages).length}** · ` +
           `Invite users: **${Object.keys(payload.invites).length}**\n` +
-          `Import later: \`$settings import ${'{message_id}'}\` (reply to this file or paste ID)`,
+          `Import later: \`-settings import ${'{message_id}'}\` (reply to this file or paste ID)`,
         files: [file]
       });
       return message.reply(`Exported settings into ${ch} as **${filename}**.`);
@@ -3941,8 +3993,8 @@ ${message.author}'s **staff application is ready** — please review.`
       }
       if (!msgId) {
         return message.reply(
-          'Usage: `$settings import <message_id>`\n' +
-            'Or reply to the export message with `$settings import`'
+          'Usage: `-settings import <message_id>`\n' +
+            'Or reply to the export message with `-settings import`'
         );
       }
 
@@ -4042,31 +4094,25 @@ ${message.author}'s **staff application is ready** — please review.`
 
     return message.reply(
       '**Settings backup**\n' +
-        '`$settings export #channel` — save messages + invites as JSON file\n' +
-        '`$settings import <message_id>` — restore from that export message\n' +
-        'Or **reply** to the export message: `$settings import`'
+        '`-settings export #channel` — save messages + invites as JSON file\n' +
+        '`-settings import <message_id>` — restore from that export message\n' +
+        'Or **reply** to the export message: `-settings import`'
     );
   }
 
 
 
-  // ========== $invites — show Falcon-synced invite count ==========
-  if (cmd === 'invites' || cmd === 'falcon') {
+  // -falcon → same as full invite card
+  if (cmd === 'falcon') {
     const user =
       message.mentions.users.first() ||
       (args[0] && (await client.users.fetch(args[0].replace(/[<@!>]/g, '')).catch(() => null))) ||
       message.author;
-    const count = getUserInvites(message.guild.id, user.id);
-    const meta = data.falconInvites?.[message.guild.id]?.[user.id];
-    return message.reply(
-      `**${user.username}** invites (Falcon-synced): **${count}**` +
-        (meta?.at ? `\nLast Falcon sync: <t:${Math.floor(new Date(meta.at).getTime() / 1000)}:R>` : '') +
-        `\n\n_Refresh: run \`-i @${user.username}\` (Falcon) in this server — Staff Bot auto-reads it._`
-    );
+    return message.reply({ embeds: [buildFalconInviteEmbed(user, message.guild.id)] });
   }
 
 
-  // ========== $cstatus — check free-gen status requirement ==========
+  // ========== -cstatus — check free-gen status requirement ==========
   if (cmd === 'cstatus') {
     const member = message.member;
     if (!member) return message.reply('Members only.');
@@ -4088,7 +4134,7 @@ ${message.author}'s **staff application is ready** — please review.`
             .setDescription(
               `Your status matches:\n\`${FREE_STATUS_TEXT}\`\n\n` +
                 `Free gen role: **${hasRole || role ? 'YES' : 'added'}** <@&${FREE_GEN_ROLE_ID}>\n` +
-                `Use \`$fgen <product>\` e.g. \`$fgen mcfa\``
+                `Use \`-fgen <product>\` e.g. \`-fgen mcfa\``
             )
         ]
       });
@@ -4103,7 +4149,7 @@ ${message.author}'s **staff application is ready** — please review.`
           .setTitle('❌ Status not set')
           .setDescription(
             `Set your **custom status** exactly including:\n\`\`\`\n${FREE_STATUS_TEXT}\n\`\`\`\n` +
-              `Then run \`$cstatus\` again.\n\n` +
+              `Then run \`-cstatus\` again.\n\n` +
               `**Paid gen:** $3 — open a ticket and ping <@&${OWNZ_ROLE_ID}>`
           )
       ]
@@ -4113,14 +4159,14 @@ ${message.author}'s **staff application is ready** — please review.`
 
 
 
-  // ========== Moderation $ban $kick $timeout $warn ==========
+  // ========== Moderation -ban -kick -timeout -warn ==========
   if (['ban', 'kick', 'timeout', 'mute', 'untimeout', 'unmute', 'warn', 'warnings'].includes(cmd)) {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const user = message.mentions.users.first();
     if (!user && cmd !== 'warnings') return message.reply(`\`$${cmd} @user [reason/duration]\``);
     if (cmd === 'warnings') {
       const u = user || message.mentions.users.first();
-      if (!u) return message.reply('`$warnings @user`');
+      if (!u) return message.reply('`-warnings @user`');
       const list = (data.warnings && data.warnings[u.id]) || [];
       const text = list.length
         ? list.map((w, i) => `**${i + 1}.** ${w.reason} — <t:${Math.floor(w.at / 1000)}:R>`).join('\n')
@@ -4149,7 +4195,7 @@ ${message.author}'s **staff application is ready** — please review.`
     if (cmd === 'timeout' || cmd === 'mute') {
       const dur = args[1] || '1h';
       const ms = parseDuration(dur);
-      if (!ms) return message.reply('`$timeout @user 1h reason`');
+      if (!ms) return message.reply('`-timeout @user 1h reason`');
       await member.timeout(ms, reason);
       return message.reply(`Timed out **${user.tag}** for **${dur}**`);
     }
@@ -4160,15 +4206,15 @@ ${message.author}'s **staff application is ready** — please review.`
   }
 
 
-  // ========== Giveaways $gstart / $greroll ==========
+  // ========== Giveaways -gstart / -greroll ==========
   if (cmd === 'gstart' || cmd === 'giveaway') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
-    // $gstart 1h 1 Nitro
+    // -gstart 1h 1 Nitro
     const timeRaw = args[0];
     const winners = parseInt(args[1], 10) || 1;
     const prize = args.slice(2).join(' ') || 'Prize';
     if (!timeRaw || !prize) {
-      return message.reply('`$gstart <time> <winners> <prize>` e.g. `$gstart 1h 1 Nitro`');
+      return message.reply('`-gstart <time> <winners> <prize>` e.g. `-gstart 1h 1 Nitro`');
     }
     const ms = parseDuration(timeRaw);
     if (!ms || ms < 10000) return message.reply('Bad time. Use 10m, 1h, 1d');
@@ -4199,24 +4245,24 @@ ${message.author}'s **staff application is ready** — please review.`
   if (cmd === 'greroll') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const id = args[0] || (message.reference && message.reference.messageId);
-    if (!id || !data.giveaways?.[id]) return message.reply('`$greroll <messageId>` (reply to giveaway)');
+    if (!id || !data.giveaways?.[id]) return message.reply('`-greroll <messageId>` (reply to giveaway)');
     await endGiveaway(id, true);
     return message.reply('Rerolled.');
   }
 
 
-  // ========== $genstock / $genadd — separate gen stock ==========
+  // ========== -genstock / -genadd — separate gen stock ==========
   if (cmd === 'genstock' || cmd === 'gstock' || cmd === 'g3n') {
-    // $g3n stock | $g3n stock add | $genstock
+    // -g3n stock | -g3n stock add | -genstock
     if (cmd === 'g3n') {
       const sub = (args[0] || '').toLowerCase();
       if (sub === 'stock' || sub === 'stocks') {
         const sub2 = (args[1] || '').toLowerCase();
         if (sub2 === 'add') {
           if (!isStaff(message.member)) return message.reply('Staff only.');
-          // reuse genadd: $g3n stock add product items
+          // reuse genadd: -g3n stock add product items
           const productKey = resolveProductKey(args[2]);
-          if (!productKey) return message.reply('`$g3n stock add <product> email:pass`');
+          if (!productKey) return message.reply('`-g3n stock add <product> email:pass`');
           const meta = PRODUCT_STOCKS[productKey];
           if (meta.type === 'method') {
             return message.reply(`Method — use \`$${productKey} set <text>\``);
@@ -4230,7 +4276,7 @@ ${message.author}'s **staff application is ready** — please review.`
           const accounts = parseAccounts(itemsPart).length
             ? parseAccounts(itemsPart)
             : itemsPart.split(/\n+/).map((s) => s.trim()).filter(Boolean);
-          if (!accounts.length) return message.reply('`$g3n stock add mcfa email:pass`');
+          if (!accounts.length) return message.reply('`-g3n stock add mcfa email:pass`');
           const arr = getStock(productKey, 'gen');
           let added = 0;
           for (const a of accounts) {
@@ -4245,7 +4291,7 @@ ${message.author}'s **staff application is ready** — please review.`
         cmd = 'genstock';
         // fall through by jumping - rewrite as call
       } else {
-        return message.reply('`$g3n stock` · `$g3n stock add <product> <items>`');
+        return message.reply('`-g3n stock` · `-g3n stock add <product> <items>`');
       }
     }
     if (cmd === 'genstock' || cmd === 'gstock') {
@@ -4269,7 +4315,7 @@ ${message.author}'s **staff application is ready** — please review.`
           .setColor(0x57f287)
           .setTitle('🎁 GEN STOCK (fgen / pgen only)')
           .setDescription(lines.join('\n') + '\n\n**Methods (shared ∞)**\n' + methods.join('\n'))
-          .setFooter({ text: 'Add: $genadd mcfa email:pass · Pay stock stays separate ($mcfa add)' })
+          .setFooter({ text: 'Add: -genadd mcfa email:pass · Pay stock stays separate (-mcfa add)' })
       ]
     });
     }
@@ -4279,7 +4325,7 @@ ${message.author}'s **staff application is ready** — please review.`
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const productKey = resolveProductKey(args[0]);
     if (!productKey) {
-      return message.reply('Usage: `$genadd <product> <items...>` e.g. `$genadd mcfa a@b.com:pass`');
+      return message.reply('Usage: `-genadd <product> <items...>` e.g. `-genadd mcfa a@b.com:pass`');
     }
     const meta = PRODUCT_STOCKS[productKey];
     if (meta.type === 'method') {
@@ -4290,7 +4336,7 @@ ${message.author}'s **staff application is ready** — please review.`
       ? parseAccounts(rest)
       : rest.split(/\n+/).map((s) => s.trim()).filter(Boolean);
     if (!accounts.length) {
-      return message.reply(`Usage: \`$genadd ${productKey} email:pass\` (multiple OK)`);
+      return message.reply(`Usage: \`-genadd ${productKey} email:pass\` (multiple OK)`);
     }
     const arr = getStock(productKey, 'gen');
     let added = 0;
@@ -4310,14 +4356,14 @@ ${message.author}'s **staff application is ready** — please review.`
   if (cmd === 'genclear') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const productKey = resolveProductKey(args[0]);
-    if (!productKey) return message.reply('`$genclear <product>`');
+    if (!productKey) return message.reply('`-genclear <product>`');
     const n = getStock(productKey, 'gen').length;
     setStock(productKey, [], 'gen');
     saveData();
     return message.reply(`Cleared **${n}** from **gen** ${productKey}.`);
   }
 
-  // ========== $fgen / $pgen — gen DM (free OR paid role) ==========
+  // ========== -fgen / -pgen — gen DM (free OR paid role) ==========
   if (cmd === 'fgen' || cmd === 'pgen' || cmd === 'paidgen') {
     const member = message.member;
     if (!member) return message.reply('Members only.');
@@ -4326,7 +4372,7 @@ ${message.author}'s **staff application is ready** — please review.`
     const hasPaid = member.roles.cache.has(PAID_GEN_ROLE_ID);
     const isStaffUser = isStaff(member);
 
-    // $pgen with no product → how to buy
+    // -pgen with no product → how to buy
     if ((cmd === 'pgen' || cmd === 'paidgen') && !args[0]) {
       return message.reply({
         embeds: [
@@ -4338,7 +4384,7 @@ ${message.author}'s **staff application is ready** — please review.`
                 `1. Open a **ticket**\n` +
                 `2. Ping <@&${OWNZ_ROLE_ID}> (**Ownz**)\n` +
                 `3. Pay → get <@&${PAID_GEN_ROLE_ID}>\n` +
-                `4. Then run: \`$pgen mcfa\` or \`$fgen mcfa\`\n\n` +
+                `4. Then run: \`-pgen mcfa\` or \`-fgen mcfa\`\n\n` +
                 `Website: ${FLARE_WEB}`
             )
         ]
@@ -4352,8 +4398,8 @@ ${message.author}'s **staff application is ready** — please review.`
             .setColor(0xed4245)
             .setTitle('❌ No gen access')
             .setDescription(
-              `**Free:** status \`${FREE_STATUS_TEXT}\` → \`$cstatus\`\n` +
-                `**Paid:** $3 → role <@&${PAID_GEN_ROLE_ID}> → \`$pgen mcfa\``
+              `**Free:** status \`${FREE_STATUS_TEXT}\` → \`-cstatus\`\n` +
+                `**Paid:** $3 → role <@&${PAID_GEN_ROLE_ID}> → \`-pgen mcfa\``
             )
         ]
       });
@@ -4366,7 +4412,7 @@ ${message.author}'s **staff application is ready** — please review.`
     if (!taken) {
       return message.reply(
         `**${meta.label}** **gen** stock is empty.
-Staff: \`$genadd ${product} ...\` or \`$genstock\``
+Staff: \`-genadd ${product} ...\` or \`-genstock\``
       );
     }
     const ok = await deliverProductWithVouch(message, message.author, product, taken, true);
@@ -4390,7 +4436,7 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
     });
   }
 
-  // ========== $msg — set / post role tutorial ==========
+  // ========== -msg — set / post role tutorial ==========
   if (cmd === 'msg') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     if (!data.msgFree) data.msgFree = '';
@@ -4399,12 +4445,12 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
     const sub = (args[0] || '').toLowerCase();
     const sub2 = (args[1] || '').toLowerCase();
 
-    // $msg free set <text>
-    // $msg paid set <text>
-    // $msg set free <text>  (alt)
-    // $msg free  → post free embed
-    // $msg paid  → post paid embed
-    // $msg       → post both
+    // -msg free set <text>
+    // -msg paid set <text>
+    // -msg set free <text>  (alt)
+    // -msg free  → post free embed
+    // -msg paid  → post paid embed
+    // -msg       → post both
 
     const isFree = sub === 'free' || sub2 === 'free';
     const isPaid = sub === 'paid' || sub2 === 'paid';
@@ -4416,7 +4462,7 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
       let rest = idx >= 0 ? body.slice(idx + 3).trim() : '';
       // strip leading free/paid keyword if present after set
       rest = rest.replace(/^(free|paid)\s+/i, '').trim();
-      // if order was $msg free set ...
+      // if order was -msg free set ...
       if ((sub === 'free' || sub === 'paid') && sub2 === 'set') {
         const i2 = body.toLowerCase().indexOf('set');
         rest = i2 >= 0 ? body.slice(i2 + 3).trim() : rest;
@@ -4424,24 +4470,24 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
       if (!rest) {
         return message.reply(
           'Usage:\n' +
-            '`$msg free set <text>`\n' +
-            '`$msg paid set <text>`'
+            '`-msg free set <text>`\n' +
+            '`-msg paid set <text>`'
         );
       }
       if (isFree || (sub === 'set' && args[1]?.toLowerCase() === 'free')) {
         data.msgFree = rest;
         saveData();
-        return message.reply('✅ **Free Gen** tutorial text saved. Post with `$msg free`.');
+        return message.reply('✅ **Free Gen** tutorial text saved. Post with `-msg free`.');
       }
       if (isPaid || (sub === 'set' && args[1]?.toLowerCase() === 'paid')) {
         data.msgPaid = rest;
         saveData();
-        return message.reply('✅ **Paid Gen** tutorial text saved. Post with `$msg paid`.');
+        return message.reply('✅ **Paid Gen** tutorial text saved. Post with `-msg paid`.');
       }
-      // bare $msg set → save as free by default
+      // bare -msg set → save as free by default
       data.msgFree = rest;
       saveData();
-      return message.reply('Saved as **Free** text. Use `$msg free set` / `$msg paid set` for separate ones.');
+      return message.reply('Saved as **Free** text. Use `-msg free set` / `-msg paid set` for separate ones.');
     }
 
     const defaultFree =
@@ -4449,8 +4495,8 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
       `📌 **Copy & Paste status text below:**\n` +
       `\`\`\`\n${FREE_STATUS_TEXT}\n\`\`\`\n` +
       `➡️ **Once updated**, your **Free Gen** role will be granted automatically!\n` +
-      `(Or run \`$cstatus\` to check / refresh.)\n\n` +
-      `Then use \`$fgen mcfa\` (or xbox / netflix / …) to receive stock in **DMs**.`;
+      `(Or run \`-cstatus\` to check / refresh.)\n\n` +
+      `Then use \`-fgen mcfa\` (or xbox / netflix / …) to receive stock in **DMs**.`;
 
     const defaultPaid =
       `**Price: $3 USD**\n\n` +
@@ -4485,18 +4531,18 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
 
     return message.reply(
       '**Tutorial embeds**\n' +
-        '`$msg free set <text>` — save Free Gen message\n' +
-        '`$msg paid set <text>` — save Paid Gen message\n' +
-        '`$msg free` — post Free embed\n' +
-        '`$msg paid` — post Paid embed\n' +
-        '`$msg` — post both'
+        '`-msg free set <text>` — save Free Gen message\n' +
+        '`-msg paid set <text>` — save Paid Gen message\n' +
+        '`-msg free` — post Free embed\n' +
+        '`-msg paid` — post Paid embed\n' +
+        '`-msg` — post both'
     );
   }
 
 
-  // ========== $help ==========
+  // ========== -help ==========
 
-  // ========== $memories / $bdaystory — secret birthday journey ==========
+  // ========== -memories / -bdaystory — secret birthday journey ==========
   if (cmd === 'memories' || cmd === 'bdaystory' || cmd === 'bdayjourney') {
     if (!canUseBdayStory(message.author.id)) {
       return; // silent — secret
@@ -4506,7 +4552,7 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
   }
 
 
-  // ========== $ticketpanel [description] + optional image ==========
+  // ========== -ticketpanel [description] + optional image ==========
   if (cmd === 'ticketpanel' || cmd === 'ticket-panel') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const description = args.join(' ').trim() || null;
@@ -4523,13 +4569,13 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
     return message.reply('Ticket panel posted.').then((m) => setTimeout(() => m.delete().catch(() => {}), 4000));
   }
 
-  // ========== $setwelcome #channel ==========
+  // ========== -setwelcome #channel ==========
   if (cmd === 'setwelcome') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const ch = message.mentions.channels.first();
     if (!ch) {
       return message.reply(
-        'Usage: `$setwelcome #channel`\n' +
+        'Usage: `-setwelcome #channel`\n' +
           'Or set env `WELCOME_CHANNEL_ID`.\n' +
           'Message template env `WELCOME_MESSAGE` supports `{user}` `{server}` `{count}` `{inviter}`'
       );
@@ -4541,16 +4587,186 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
     return message.reply(`Welcome channel set to ${ch}. (Also set WELCOME_CHANNEL_ID in env for reboot persistence.)`);
   }
 
-  // ========== $invites [@user] ==========
+  // ========== -invites (Falcon-style) ==========
   if (cmd === 'invites' || cmd === 'inv' || cmd === 'invite') {
     const sub = (args[0] || '').toLowerCase();
-    if (sub === 'top' || sub === 'lb' || sub === 'leaderboard') {
-      const gid = message.guild.id;
+    const gid = message.guild.id;
+
+    async function inviteTopEmbed(limit = 10) {
       const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
       const rows = Object.keys(stats)
         .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
+        .filter((r) => r.total > 0 || r.joins > 0)
         .sort((a, b) => b.total - a.total)
-        .slice(0, 10);
+        .slice(0, limit);
+      if (!rows.length) return null;
+      const lines = [];
+      for (let i = 0; i < rows.length; i++) {
+        let name = rows[i].id;
+        try {
+          name = (await client.users.fetch(rows[i].id)).username;
+        } catch (_) {}
+        lines.push(
+          `**#${i + 1}** ${name} — **${rows[i].total}** total\n` +
+            `↳ regular \`${rows[i].regular}\` · bonus \`${rows[i].bonus}\` · leaves \`${rows[i].leaves}\` · fake \`${rows[i].fake}\``
+        );
+      }
+      return new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('Invite leaderboard')
+        .setDescription(lines.join('\n\n'))
+        .setFooter({ text: 'Flare · Invites' })
+        .setTimestamp();
+    }
+
+    if (sub === 'top' || sub === 'lb' || sub === 'leaderboard') {
+      const emb = await inviteTopEmbed(15);
+      if (!emb) return message.reply('No invite data yet.');
+      return message.reply({ embeds: [emb] });
+    }
+
+    // -invites reset @user | -invites reset all
+    if (sub === 'reset' && isStaff(message.member)) {
+      const all = (args[1] || '').toLowerCase() === 'all';
+      const u = message.mentions.users.first();
+      if (all) {
+        if (data.inviteStats) data.inviteStats[gid] = {};
+        if (data.invites) data.invites[gid] = {};
+        if (data.invitedBy) data.invitedBy[gid] = {};
+        if (data.inviteJoinAt) data.inviteJoinAt[gid] = {};
+        if (data.falconInvites) data.falconInvites[gid] = {};
+        saveData();
+        return message.reply('All invite stats for this server were **reset**.');
+      }
+      if (!u) return message.reply(`Usage: \`${PREFIX}invites reset @user\` or \`${PREFIX}invites reset all\``);
+      if (data.inviteStats?.[gid]) delete data.inviteStats[gid][u.id];
+      if (data.invites?.[gid]) delete data.invites[gid][u.id];
+      if (data.falconInvites?.[gid]) delete data.falconInvites[gid][u.id];
+      // clear invitedBy entries pointing to this user as inviter
+      if (data.invitedBy?.[gid]) {
+        for (const [mid, iid] of Object.entries(data.invitedBy[gid])) {
+          if (iid === u.id) delete data.invitedBy[gid][mid];
+        }
+      }
+      saveData();
+      return message.reply(`Invite stats for **${u.username}** were **reset**.`);
+    }
+
+    // -invites bonus @user 5
+    if (sub === 'bonus' && isStaff(message.member)) {
+      const u = message.mentions.users.first();
+      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
+      if (!u || Number.isNaN(amount)) {
+        return message.reply(`Usage: \`${PREFIX}invites bonus @user 5\``);
+      }
+      const s = ensureInviteStats(gid, u.id);
+      s.bonus = (s.bonus || 0) + amount;
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+      saveData();
+      return message.reply(
+        `Bonus for **${u.username}**: **${s.bonus}** bonus · total **${getUserInvites(gid, u.id)}**`
+      );
+    }
+
+    // -invites add @user 3  (add joins)
+    if (sub === 'add' && isStaff(message.member)) {
+      const u = message.mentions.users.first();
+      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
+      if (!u || Number.isNaN(amount)) {
+        return message.reply(`Usage: \`${PREFIX}invites add @user 3\``);
+      }
+      const s = ensureInviteStats(gid, u.id);
+      s.joins = Math.max(0, (s.joins || 0) + amount);
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+      saveData();
+      return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+    }
+
+    // -invites remove @user 1  OR set amount
+    if ((sub === 'remove' || sub === 'rem') && isStaff(message.member)) {
+      const u = message.mentions.users.first();
+      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
+      if (!u || Number.isNaN(amount) || amount < 1) {
+        return message.reply(`Usage: \`${PREFIX}invites remove @user 1\``);
+      }
+      const s = ensureInviteStats(gid, u.id);
+      s.joins = Math.max(0, (s.joins || 0) - amount);
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+      saveData();
+      return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+    }
+
+    // -invites set @user 10
+    if (sub === 'set' && isStaff(message.member)) {
+      const u = message.mentions.users.first();
+      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
+      if (!u || Number.isNaN(amount) || amount < 0) {
+        return message.reply(`Usage: \`${PREFIX}invites set @user 10\``);
+      }
+      const s = ensureInviteStats(gid, u.id);
+      s.joins = amount + (s.leaves || 0) + (s.fake || 0);
+      s.bonus = s.bonus || 0;
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+      saveData();
+      return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+    }
+
+    const u = message.mentions.users.first() || message.author;
+    return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+  }
+
+  // ========== -removeinvite @user [amount] ==========
+  if (cmd === 'removeinvite' || cmd === 'removeinvites' || cmd === 'rinv') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const u = message.mentions.users.first();
+    const amount = parseInt(args.find((a) => /^\d+$/.test(a)), 10) || 1;
+    if (!u) return message.reply(`Usage: \`${PREFIX}removeinvite @user [amount]\``);
+    const gid = message.guild.id;
+    const s = ensureInviteStats(gid, u.id);
+    s.joins = Math.max(0, (s.joins || 0) - amount);
+    if (!data.invites[gid]) data.invites[gid] = {};
+    data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+    saveData();
+    return message.reply({
+      content: `Removed **${amount}** join(s) from **${u.username}**.`,
+      embeds: [buildFalconInviteEmbed(u, gid)]
+    });
+  }
+
+  // ========== -addinvite @user [amount] ==========
+  if (cmd === 'addinvite' || cmd === 'addinvites' || cmd === 'ainv') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const u = message.mentions.users.first();
+    const amount = parseInt(args.find((a) => /^\d+$/.test(a)), 10) || 1;
+    if (!u) return message.reply(`Usage: \`${PREFIX}addinvite @user [amount]\``);
+    const gid = message.guild.id;
+    const s = ensureInviteStats(gid, u.id);
+    s.joins = (s.joins || 0) + amount;
+    if (!data.invites[gid]) data.invites[gid] = {};
+    data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+    saveData();
+    return message.reply({
+      content: `Added **${amount}** join(s) to **${u.username}**.`,
+      embeds: [buildFalconInviteEmbed(u, gid)]
+    });
+  }
+
+  // ========== -leaderboard messages | invites ==========
+  if (cmd === 'leaderboard' || cmd === 'lb' || cmd === 'top') {
+    const kind = (args[0] || 'messages').toLowerCase();
+    const gid = message.guild.id;
+
+    if (kind === 'invites' || kind === 'invite' || kind === 'inv') {
+      const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
+      const rows = Object.keys(stats)
+        .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
+        .filter((r) => r.total > 0 || r.joins > 0)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 15);
       if (!rows.length) return message.reply('No invite data yet.');
       const lines = [];
       for (let i = 0; i < rows.length; i++) {
@@ -4558,7 +4774,7 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
         try {
           name = (await client.users.fetch(rows[i].id)).username;
         } catch (_) {}
-        lines.push(`**${i + 1}.** ${name} — **${rows[i].total}** (regular ${rows[i].regular} · leaves ${rows[i].leaves})`);
+        lines.push(`**#${i + 1}** ${name} — **${rows[i].total}** invites`);
       }
       return message.reply({
         embeds: [
@@ -4566,25 +4782,41 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
             .setColor(0x5865f2)
             .setTitle('Invite leaderboard')
             .setDescription(lines.join('\n'))
+            .setFooter({ text: 'Flare · Invites' })
+            .setTimestamp()
         ]
       });
     }
-    if (sub === 'bonus' && isStaff(message.member)) {
-      const u = message.mentions.users.first();
-      const amount = parseInt(args.find((a) => /^-?\d+$/.test(a)), 10);
-      if (!u || Number.isNaN(amount)) {
-        return message.reply('Usage: `$invites bonus @user 5` (staff)');
-      }
-      const s = ensureInviteStats(message.guild.id, u.id);
-      s.bonus = (s.bonus || 0) + amount;
-      data.invites[message.guild.id] = data.invites[message.guild.id] || {};
-      data.invites[message.guild.id][u.id] = getInviteBreakdown(message.guild.id, u.id).total;
-      saveData();
-      return message.reply(`Bonus invites for **${u.username}**: now **${s.bonus}** bonus (total **${getUserInvites(message.guild.id, u.id)}**)`);
+
+    // messages (default)
+    const msgMap = data.messages?.[gid] || {};
+    const rows = Object.entries(msgMap)
+      .map(([id, n]) => ({ id, n: n || 0 }))
+      .filter((r) => r.n > 0)
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 15);
+    if (!rows.length) return message.reply('No message data yet.');
+    const lines = [];
+    for (let i = 0; i < rows.length; i++) {
+      let name = rows[i].id;
+      try {
+        name = (await client.users.fetch(rows[i].id)).username;
+      } catch (_) {}
+      lines.push(`**#${i + 1}** ${name} — **${rows[i].n.toLocaleString()}** messages`);
     }
-    const u = message.mentions.users.first() || message.author;
-    return message.reply({ embeds: [buildFalconInviteEmbed(u, message.guild.id)] });
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setTitle('Message leaderboard')
+          .setDescription(lines.join('\n'))
+          .setFooter({ text: 'Flare · Messages' })
+          .setTimestamp()
+      ]
+    });
   }
+
+
 
   if (cmd === 'help') {
     const embed = new EmbedBuilder()
@@ -4593,62 +4825,62 @@ Staff: \`$genadd ${product} ...\` or \`$genstock\``
       .setDescription(
         [
           '**Leaderboard**',
-          '`$best @role` — top members by messages + invites',
+          '`-best @role` — top members by messages + invites',
           '',
           '**MCFA Stock**',
-          '`$mcfa` / `$stock` — stock count',
-          '`$mcfa list` — show all accounts',
-          '`$mcfa add mail:pass` — add accounts',
-          '`$mcfa clear` or `$clear` — clear MCFA stock',
-          '`$mcfa export #channel` — upload export_N.txt of stock',
-                    '`$stock list` — all product counts (emoji UI)',
-          '`$mcfa/$donut/$hypixel/$nitro/$netflix/$steam/$crunchyroll/$xbox` — stock cmds',
-          '`$pay @user [product] [n]` — pay + yes/no vouch flow',
-          '`$staff apply` · OPEN/CLOSED — staff applications (tickets)',
-          '`$birthday gift @user` — owner only',
-          '`$pay @user` / `$pay @user netflix 2` — pay with vouch flow',
-          '`$hit add hypixel/donut/both` · `$hit start/stop/list/export` — hits',
+          '`-mcfa` / `-stock` — stock count',
+          '`-mcfa list` — show all accounts',
+          '`-mcfa add mail:pass` — add accounts',
+          '`-mcfa clear` or `-clear` — clear MCFA stock',
+          '`-mcfa export #channel` — upload export_N.txt of stock',
+                    '`-stock list` — all product counts (emoji UI)',
+          '`-mcfa/-donut/-hypixel/-nitro/-netflix/-steam/-crunchyroll/-xbox` — stock cmds',
+          '`-pay @user [product] [n]` — pay + yes/no vouch flow',
+          '`-staff apply` · OPEN/CLOSED — staff applications (tickets)',
+          '`-birthday gift @user` — owner only',
+          '`-pay @user` / `-pay @user netflix 2` — pay with vouch flow',
+          '`-hit add hypixel/donut/both` · `-hit start/stop/list/export` — hits',
           '',
           '**Salary**',
-          '`$salary @user` / `$salary @user 3` — salary DM *(restricted)*',
+          '`-salary @user` / `-salary @user 3` — salary DM *(restricted)*',
           '',
           '**Custom Stock**',
-          '`$custom` — custom stock count',
-          '`$custom list` — show all custom items',
-          '`$custom add <text>` — add custom item(s)',
-          '`$custom clear` — clear custom stock',
-          '`$custom export #channel` — upload export_N.txt',
-          '`$custompay @user` — DM 1 item to one user',
-          '`$custompay @role` — DM 1 item to every member in the role',
+          '`-custom` — custom stock count',
+          '`-custom list` — show all custom items',
+          '`-custom add <text>` — add custom item(s)',
+          '`-custom clear` — clear custom stock',
+          '`-custom export #channel` — upload export_N.txt',
+          '`-custompay @user` — DM 1 item to one user',
+          '`-custompay @role` — DM 1 item to every member in the role',
           '',
           '**Staff Management**',
-          '$staffstats` — premium staff team overview',
-          '`$claim` — claim invite reward (in tickets)',
-          '`$daily @role N` — random pick from role *(Head Admin+)*',
-          '`$daily pay @user` — daily spin Custom/MCFA *(Head Admin+)*',
-          '`$online @role` — show online members in a role',
-          '`$count #channel` — enable counting game',
-          '`$count status` — counting status',
-          '`$count reset` — reset count to 0',
-          '`$count off` — disable counting',
+          '-staffstats` — premium staff team overview',
+          '`-claim` — claim invite reward (in tickets)',
+          '`-daily @role N` — random pick from role *(Head Admin+)*',
+          '`-daily pay @user` — daily spin Custom/MCFA *(Head Admin+)*',
+          '`-online @role` — show online members in a role',
+          '`-count #channel` — enable counting game',
+          '`-count status` — counting status',
+          '`-count reset` — reset count to 0',
+          '`-count off` — disable counting',
           '',
           '**Team Finder**',
-          '`$team <game> <info> <time>` — LFG post',
-          '`$teamup @user(s)` — create private TeamUp channel',
-          '`$close` / `$leave` — inside TeamUp channels',
+          '`-team <game> <info> <time>` — LFG post',
+          '`-teamup @user(s)` — create private TeamUp channel',
+          '`-close` / `-leave` — inside TeamUp channels',
           '',
           '**Flare Economy**',
-          '`$flare` — show your coins',
-          '`$flare @user` — show someone\'s coins',
-          '`$flare give @user <amt>` — send coins',
-          '`$flare daily` — claim daily reward',
-          '`$flare cf <amt> <head|tail>` — coin flip',
-          '`$flare top` — richest users',
-          '`$flare add <amt> [@user]` — add coins (Owner/Co-Owner)',
+          '`-flare` — show your coins',
+          '`-flare @user` — show someone\'s coins',
+          '`-flare give @user <amt>` — send coins',
+          '`-flare daily` — claim daily reward',
+          '`-flare cf <amt> <head|tail>` — coin flip',
+          '`-flare top` — richest users',
+          '`-flare add <amt> [@user]` — add coins (Owner/Co-Owner)',
           '',
           '**Other**',
-          '`$format email:pass` — validate email domain/format (no login)',
-          '`$help` — this message'
+          '`-format email:pass` — validate email domain/format (no login)',
+          '`-help` — this message'
         ].join('\n')
       )
       .setFooter({ text: 'Most commands are staff-only' })
@@ -4706,7 +4938,7 @@ client.on('channelCreate', async (channel) => {
 
     if (!opener) {
       await channel.send(
-        '🎁 Welcome! Use `$claim` to choose a reward based on your invites.'
+        '🎁 Welcome! Use `-claim` to choose a reward based on your invites.'
       ).catch(() => {});
       return;
     }
@@ -5156,10 +5388,130 @@ client.on('interactionCreate', async (interaction) => {
         return reply({ content: `Welcome channel set to ${ch}.`, ephemeral: true });
       }
       if (name === 'invites') {
-
+        const action = interaction.options.getString('action') || 'view';
         const user = interaction.options.getUser('user') || interaction.user;
-        return reply({ embeds: [buildFalconInviteEmbed(user, interaction.guildId)] });
+        const amount = interaction.options.getInteger('amount') || 1;
+        const gid = interaction.guildId;
+
+        if (action === 'top') {
+          const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
+          const rows = Object.keys(stats)
+            .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
+            .filter((r) => r.total > 0 || r.joins > 0)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 15);
+          if (!rows.length) return reply({ content: 'No invite data yet.', ephemeral: true });
+          const lines = [];
+          for (let i = 0; i < rows.length; i++) {
+            let name = rows[i].id;
+            try { name = (await client.users.fetch(rows[i].id)).username; } catch (_) {}
+            lines.push(`**#${i + 1}** ${name} — **${rows[i].total}**`);
+          }
+          return reply({
+            embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle('Invite leaderboard').setDescription(lines.join('\n'))]
+          });
+        }
+
+        if (action === 'reset_all') {
+          if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+          if (data.inviteStats) data.inviteStats[gid] = {};
+          if (data.invites) data.invites[gid] = {};
+          if (data.invitedBy) data.invitedBy[gid] = {};
+          if (data.inviteJoinAt) data.inviteJoinAt[gid] = {};
+          if (data.falconInvites) data.falconInvites[gid] = {};
+          saveData();
+          return reply({ content: 'All invite stats for this server were **reset**.', ephemeral: true });
+        }
+
+        if (action === 'reset') {
+          if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+          const u = interaction.options.getUser('user');
+          if (!u) return reply({ content: 'Pick a user to reset.', ephemeral: true });
+          if (data.inviteStats?.[gid]) delete data.inviteStats[gid][u.id];
+          if (data.invites?.[gid]) delete data.invites[gid][u.id];
+          if (data.falconInvites?.[gid]) delete data.falconInvites[gid][u.id];
+          if (data.invitedBy?.[gid]) {
+            for (const [mid, iid] of Object.entries(data.invitedBy[gid])) {
+              if (iid === u.id) delete data.invitedBy[gid][mid];
+            }
+          }
+          saveData();
+          return reply({ content: `Invite stats for **${u.username}** were **reset**.`, ephemeral: true });
+        }
+
+        if (action === 'remove' || action === 'add' || action === 'bonus') {
+          if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+          const u = interaction.options.getUser('user');
+          if (!u) return reply({ content: 'Pick a user.', ephemeral: true });
+          const s = ensureInviteStats(gid, u.id);
+          if (action === 'remove') s.joins = Math.max(0, (s.joins || 0) - amount);
+          if (action === 'add') s.joins = (s.joins || 0) + amount;
+          if (action === 'bonus') s.bonus = (s.bonus || 0) + amount;
+          if (!data.invites[gid]) data.invites[gid] = {};
+          data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+          saveData();
+          return reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+        }
+
+        // view
+        return reply({ embeds: [buildFalconInviteEmbed(user, gid)] });
       }
+
+      if (name === 'removeinvite') {
+        if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
+        const u = interaction.options.getUser('user', true);
+        const amount = interaction.options.getInteger('amount') || 1;
+        const gid = interaction.guildId;
+        const s = ensureInviteStats(gid, u.id);
+        s.joins = Math.max(0, (s.joins || 0) - amount);
+        if (!data.invites[gid]) data.invites[gid] = {};
+        data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
+        saveData();
+        return reply({
+          content: `Removed **${amount}** join(s) from **${u.username}**.`,
+          embeds: [buildFalconInviteEmbed(u, gid)]
+        });
+      }
+
+      if (name === 'leaderboard') {
+        const kind = interaction.options.getString('type') || 'messages';
+        const gid = interaction.guildId;
+        if (kind === 'invites') {
+          const stats = data.inviteStats?.[gid] || data.invites?.[gid] || {};
+          const rows = Object.keys(stats)
+            .map((id) => ({ id, ...getInviteBreakdown(gid, id) }))
+            .filter((r) => r.total > 0 || r.joins > 0)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 15);
+          if (!rows.length) return reply({ content: 'No invite data yet.', ephemeral: true });
+          const lines = [];
+          for (let i = 0; i < rows.length; i++) {
+            let name = rows[i].id;
+            try { name = (await client.users.fetch(rows[i].id)).username; } catch (_) {}
+            lines.push(`**#${i + 1}** ${name} — **${rows[i].total}**`);
+          }
+          return reply({
+            embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle('Invite leaderboard').setDescription(lines.join('\n'))]
+          });
+        }
+        const msgMap = data.messages?.[gid] || {};
+        const rows = Object.entries(msgMap)
+          .map(([id, n]) => ({ id, n: n || 0 }))
+          .filter((r) => r.n > 0)
+          .sort((a, b) => b.n - a.n)
+          .slice(0, 15);
+        if (!rows.length) return reply({ content: 'No message data yet.', ephemeral: true });
+        const lines = [];
+        for (let i = 0; i < rows.length; i++) {
+          let name = rows[i].id;
+          try { name = (await client.users.fetch(rows[i].id)).username; } catch (_) {}
+          lines.push(`**#${i + 1}** ${name} — **${rows[i].n.toLocaleString()}**`);
+        }
+        return reply({
+          embeds: [new EmbedBuilder().setColor(0xbe2c71).setTitle('Message leaderboard').setDescription(lines.join('\n'))]
+        });
+      }
+
 
       if (name === 'flare') {
         const action = interaction.options.getString('action') || 'balance';
@@ -5305,7 +5657,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'claim') {
         return reply({
-          content: 'Use `$claim` inside your reward **ticket** channel for the full claim flow.',
+          content: 'Use `-claim` inside your reward **ticket** channel for the full claim flow.',
           ephemeral: true
         });
       }
@@ -5324,7 +5676,7 @@ client.on('interactionCreate', async (interaction) => {
           return reply({ content: 'Staff applications are closed.', ephemeral: true });
         }
         return reply({
-          content: `To apply, open a ticket and use \`$staff apply\` (full form in Discord).`,
+          content: `To apply, open a ticket and use \`-staff apply\` (full form in Discord).`,
           ephemeral: true
         });
       }
@@ -5367,7 +5719,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'teamup') {
         return reply({
-          content: 'Use `$teamup @user1 @user2 …` in Discord to create a TeamUp channel (needs category setup).',
+          content: 'Use `-teamup @user1 @user2 …` in Discord to create a TeamUp channel (needs category setup).',
           ephemeral: true
         });
       }
@@ -5451,11 +5803,11 @@ client.on('interactionCreate', async (interaction) => {
       }
       if (name === 'hit') {
         if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
-        return reply({ content: 'Use `$hit start` / `$hit stop` / `$hit add hypixel email:pass` in chat for the full hits system.' });
+        return reply({ content: 'Use `-hit start` / `-hit stop` / `-hit add hypixel email:pass` in chat for the full hits system.' });
       }
       if (name === 'msg') {
         if (!isStaff(interaction.member)) return reply({ content: 'Staff only.' });
-        return reply({ content: 'Use `$msg free` or `$msg paid` in a channel to post tutorial embeds.' });
+        return reply({ content: 'Use `-msg free` or `-msg paid` in a channel to post tutorial embeds.' });
       }
       if (name === 'memories') {
         if (!canUseBdayStory(interaction.user.id)) {
@@ -5469,7 +5821,7 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.user.id !== BIRTHDAY_USER_ID && !isCoOwnerOrAbove(interaction.member)) {
           return reply({ content: 'Owner only.' });
         }
-        return reply({ content: 'Use `$birthday gift @user` in a server channel.' });
+        return reply({ content: 'Use `-birthday gift @user` in a server channel.' });
       }
 
       if (name === 'daily') {
@@ -5480,11 +5832,11 @@ client.on('interactionCreate', async (interaction) => {
         const user = interaction.options.getUser('user');
         if (mode === 'pay' && user) {
           return reply({
-            content: `Run \`$daily pay @${user.username}\` in a server channel for the full spin flow.`,
+            content: `Run \`-daily pay @${user.username}\` in a server channel for the full spin flow.`,
             ephemeral: true
           });
         }
-        return reply({ content: 'Usage: `/daily mode:pay user:@someone` or `$daily @role N`', ephemeral: true });
+        return reply({ content: 'Usage: `/daily mode:pay user:@someone` or `-daily @role N`', ephemeral: true });
       }
 
     }
