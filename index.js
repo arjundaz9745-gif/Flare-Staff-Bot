@@ -25,12 +25,24 @@ const {
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
-const PREFIX = process.env.PREFIX || '-';
+const PREFIX = process.env.PREFIX || '-'; // legacy default
+const PREFIX_STATS = process.env.PREFIX_STATS || '-'; // invites, messages, si, lb
+const PREFIX_STOCK = process.env.PREFIX_STOCK || '$'; // stock, pay, gen
+const PREFIX_MOD = process.env.PREFIX_MOD || '?'; // moderation, giveaways, autorole, etc.
+const PREFIX_MOD_ALT = process.env.PREFIX_MOD_ALT || '!'; // alias for mod (e.g. !help)
+
 const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID || '1540362727581818947';
 const FLARE_GUILD_ID = process.env.GUILD_ID || process.env.FLARE_GUILD_ID || '1540362727514701894';
 const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
 
 const PORT = process.env.PORT || 3000;
+// OpenAI — key usually starts with sk- (not project-). project- is often a Project ID.
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || process.env.CHATGPT_API_KEY || '').trim();
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const AI_SYSTEM_PROMPT =
+  process.env.AI_SYSTEM_PROMPT ||
+  'You are Flare Drop helper bot for a Discord rewards server. Be short, friendly, and useful. Do not help with scams, hacking, or illegal activity. If unsure, tell them to open a support ticket.';
+
 
 // Staff role hierarchy for -staffstats (highest first)
 const OWNER_ROLE_ID = process.env.OWNER_ROLE_ID || '1540362727514701895'; // foundz.exe / Owner
@@ -1254,21 +1266,34 @@ async function startBdayStory(channel, user) {
 // ========== Ticket panel ==========
 
 async function postTicketPanel(channel, { description, bannerUrl, bannerAttachment } = {}) {
-  const desc =
-    (description && String(description).trim()) ||
-    'Need help or want to claim a reward?\n\nClick **Open ticket** below.\nA private channel will be created for you and staff.';
+  const custom = description && String(description).trim();
   const embed = new EmbedBuilder()
     .setColor(0xbe2c71)
-    .setTitle('Support tickets')
-    .setDescription(desc)
-    .setFooter({ text: 'Flare Drop · Tickets' });
+    .setAuthor({ name: 'Flare Drop · Support' })
+    .setTitle('Ticket panel')
+    .setDescription(
+      (custom ? custom + '\n\n' : '') +
+        '╭────────────────────╮\n' +
+        '  **How it works**\n' +
+        '╰────────────────────╯\n\n' +
+        '**1.** Click a button below\n' +
+        '**2.** Tell us briefly what you need\n' +
+        '**3.** Staff help you in a private channel\n\n' +
+        '_One open ticket per person._'
+    )
+    .addFields(
+      { name: 'Support', value: 'General help & questions', inline: true },
+      { name: 'Claim', value: 'Invite rewards / payouts', inline: true },
+      { name: 'Report', value: 'Issues or reports', inline: true }
+    )
+    .setFooter({ text: 'Flare Drop · Tickets' })
+    .setTimestamp();
   if (bannerUrl) embed.setImage(bannerUrl);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ticket_open')
-      .setLabel('Open ticket')
-      .setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('ticket_open_support').setLabel('Support').setStyle(ButtonStyle.Primary).setEmoji('🎫'),
+    new ButtonBuilder().setCustomId('ticket_open_claim').setLabel('Claim reward').setStyle(ButtonStyle.Success).setEmoji('🎁'),
+    new ButtonBuilder().setCustomId('ticket_open_report').setLabel('Report').setStyle(ButtonStyle.Secondary).setEmoji('🛡️')
   );
 
   const payload = { embeds: [embed], components: [row] };
@@ -1324,13 +1349,15 @@ async function createSupportTicket(guild, user, reason) {
 
   const embed = new EmbedBuilder()
     .setColor(0xbe2c71)
-    .setTitle('Support ticket')
+    .setAuthor({ name: 'Flare Drop · Ticket' })
+    .setTitle('Your ticket is open')
     .setDescription(
-      `Hello ${user}!\n\nStaff will help you soon.\n` +
-        (reason ? `**Reason:** ${reason}\n` : '') +
-        `\nClose: \`-close\` or the button below.`
+      `Hey ${user} — thanks for reaching out.\n\n` +
+        (reason ? `**Topic:** ${reason}\n\n` : '') +
+        `Staff has been notified. Share any proof here if needed.\n\n` +
+        `_Close with the button below when you are done._`
     )
-    .setFooter({ text: 'Flare Drop · Tickets' })
+    .setFooter({ text: 'Flare Drop · Support' })
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
@@ -1421,6 +1448,139 @@ function saveProtection(patch = {}) {
   data.protection = p;
   saveData();
   return p;
+}
+
+
+/** Multi-prefix command groups */
+const STATS_CMDS = new Set([
+  'i', 'inv', 'invite', 'invites', 'falcon',
+  'm', 'messages', 'msgcount',
+  'si', 'serverinfo', 'server',
+  'leaderboard', 'lb', 'top',
+  'removeinvite', 'removeinvites', 'rinv', 'rmi',
+  'addinvite', 'addinvites', 'ainv',
+  'best'
+]);
+const STOCK_CMDS = new Set([
+  'stock', 'mcfa', 'pay', 'buy', 'salary', 'clear',
+  'genstock', 'gstock', 'g3n', 'genadd', 'genclear',
+  'fgen', 'pgen', 'cstatus', 'claim',
+  'donut', 'hypixel', 'nitro', 'netflix', 'steam', 'xbox', 'custom',
+  'addstock', 'export', 'import', 'hit', 'msg',
+  'format', 'custompay', 'custom'
+]);
+const MOD_CMDS = new Set([
+  'ban', 'unban', 'kick', 'timeout', 'mute', 'unmute', 'untimeout',
+  'warn', 'warnings', 'purge', 'clearmsg', 'nuke',
+  'lock', 'unlock', 'slowmode', 'nick', 'role',
+  'gstart', 'giveaway', 'greroll',
+  'ticketpanel', 'ticket-panel', 'setwelcome',
+  'protection', 'automod', 'security',
+  'staff', 'staffstats', 'online',
+  'teamup', 'close', 'leave', 'team',
+  'autorole', 'autoroles', 'autoreact', 'autoreaction',
+  'react', 'say', 'embed', 'announce',
+  'modhelp', 'help'
+]);
+
+function detectPrefix(content) {
+  if (!content) return null;
+  // longest first: avoid matching partial
+  const candidates = [PREFIX_STATS, PREFIX_STOCK, PREFIX_MOD, PREFIX_MOD_ALT, PREFIX].filter(Boolean);
+  // unique preserve order
+  const seen = new Set();
+  for (const p of candidates) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    if (content.startsWith(p)) return p;
+  }
+  return null;
+}
+
+function expectedPrefixFor(cmd) {
+  if (cmd === 'help' || cmd === 'commands' || cmd === 'modhelp') return null; // any prefix
+  if (STATS_CMDS.has(cmd)) return PREFIX_STATS;
+  if (STOCK_CMDS.has(cmd)) return PREFIX_STOCK;
+  if (MOD_CMDS.has(cmd)) return PREFIX_MOD;
+  return null;
+}
+
+
+function buildFullHelpEmbeds() {
+  const s = PREFIX_STATS;
+  const k = PREFIX_STOCK;
+  const m = PREFIX_MOD;
+  const m2 = PREFIX_MOD_ALT || '!';
+  const pages = [
+    {
+      title: 'Flare Drop · Help',
+      desc:
+        '**Three prefixes**\n' +
+        '`' + s + '` **Stats** — invites, messages, server, leaderboards\n' +
+        '`' + k + '` **Stock** — inventory, pay, gen, claim\n' +
+        '`' + m + '` / `' + m2 + '` **Mod** — moderation, tickets, giveaways, tools\n\n' +
+        'Slash commands `/` also work for many features.\n' +
+        'Use `' + m + 'help` or `' + m2 + 'help` anytime.'
+    },
+    {
+      title: 'Stats  ' + s,
+      desc: [
+        '`' + s + 'i` / `' + s + 'invites` [@user] — invite card',
+        '`' + s + 'invites top` — invite leaderboard',
+        '`' + s + 'invites reset @user|all` — reset (staff)',
+        '`' + s + 'invites add/remove/set/bonus` — manage (staff)',
+        '`' + s + 'rmi` / `' + s + 'removeinvite @user` — remove joins',
+        '`' + s + 'm` / `' + s + 'messages` [@user] — message count',
+        '`' + s + 'si` / `' + s + 'serverinfo` — server info',
+        '`' + s + 'leaderboard m` — message LB',
+        '`' + s + 'leaderboard i` — invite LB',
+        '`' + s + 'best @role` — top by messages + invites'
+      ].join('\n')
+    },
+    {
+      title: 'Stock  ' + k,
+      desc: [
+        '`' + k + 'stock` — pay stock list',
+        '`' + k + 'mcfa` / product cmds — product stock',
+        '`' + k + 'pay @user [product] [n]` — pay from stock',
+        '`' + k + 'claim` — claim invite reward (ticket)',
+        '`' + k + 'fgen` / `' + k + 'pgen` — free / paid gen',
+        '`' + k + 'genstock` / `' + k + 'genadd` — gen pool',
+        '`' + k + 'cstatus` — free-gen status check',
+        '`' + k + 'salary @user` — salary pay (restricted)',
+        '`' + k + 'clear` — clear MCFA pay stock',
+        '`' + k + 'format email:pass` — validate format',
+        '`' + k + 'addstock` — add pay lines (staff)'
+      ].join('\n')
+    },
+    {
+      title: 'Mod & tools  ' + m + ' / ' + m2,
+      desc: [
+        '`' + m + 'ban` `' + m + 'unban` `' + m + 'kick`',
+        '`' + m + 'timeout` / `' + m + 'mute` · `' + m + 'unmute`',
+        '`' + m + 'warn` `' + m + 'warnings`',
+        '`' + m + 'purge` `' + m + 'lock` `' + m + 'unlock` `' + m + 'slowmode`',
+        '`' + m + 'nick` `' + m + 'role add|remove`',
+        '`' + m + 'gstart <time> <winners> <prize>`',
+        '`' + m + 'greroll <messageId>`',
+        '`' + m + 'ticketpanel [text]` + optional image',
+        '`' + m + 'setwelcome #channel`',
+        '`' + m + 'protection` — auto-mod / anti-nuke settings',
+        '`' + m + 'autorole set @role`',
+        '`' + m + 'autoreact add <word> <emoji>`',
+        '`' + m + 'staffstats` `' + m + 'online @role`',
+        '`' + m + 'teamup @users` `' + m + 'close` `' + m + 'leave`',
+        '`' + m + 'help` / `' + m2 + 'help` — this menu'
+      ].join('\n')
+    }
+  ];
+  return pages.map((p, i) =>
+    new EmbedBuilder()
+      .setColor(0xbe2c71)
+      .setTitle(p.title)
+      .setDescription(p.desc)
+      .setFooter({ text: 'Page ' + (i + 1) + '/' + pages.length + ' · Flare Drop' })
+  );
 }
 
 async function onReady() {
@@ -1646,6 +1806,13 @@ client.on('inviteCreate', async (invite) => {
 client.on('guildMemberAdd', async (member) => {
   const guild = member.guild;
   let inviterId = null;
+  try {
+    const roleId = data.autorole?.[guild.id];
+    if (roleId) {
+      await member.roles.add(roleId, 'Auto-role').catch(() => {});
+    }
+  } catch (_) {}
+
   // Join-raid detection
   try {
     if (getProtection().antinuke) {
@@ -1798,6 +1965,47 @@ async function exportStockToChannel(message, kind, lines, label) {
   return message.reply(
     `Exported successful all available **${label}** into ${ch}.\nUploaded as **${filename}**.`
   );
+}
+
+
+async function askOpenAI(userText, username) {
+  if (!OPENAI_API_KEY) return null;
+  const key = OPENAI_API_KEY;
+  // OpenAI secret keys are sk-... ; project- is not a valid chat key by itself
+  if (key.startsWith('project-') && !key.startsWith('sk-')) {
+    console.warn('OPENAI_API_KEY looks like a project id, not sk- key');
+  }
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + key
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        temperature: 0.6,
+        max_tokens: 500,
+        messages: [
+          { role: 'system', content: AI_SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: (username ? username + ' asks: ' : '') + (userText || 'hi')
+          }
+        ]
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('OpenAI error', res.status, data?.error?.message || data);
+      return null;
+    }
+    const out = data?.choices?.[0]?.message?.content;
+    return out && String(out).trim() ? String(out).trim().slice(0, 1900) : null;
+  } catch (e) {
+    console.error('OpenAI fetch', e.message);
+    return null;
+  }
 }
 
 function ultimateFaqReply(text) {
@@ -2157,31 +2365,43 @@ client.on('messageCreate', async (message) => {
   } catch (_) {}
 
 
-  // ========== @Bot FAQ AI (only direct @bot — not @everyone / @roles) ==========
+  // ========== @Bot AI — only when USER is @mentioned, not @everyone/@here ==========
   try {
     if (
       client.user &&
-      !message.author.bot &&
       message.mentions.users.has(client.user.id) &&
       !message.mentions.everyone
     ) {
-      // Ignore pure role mass-pings that also happen to list the bot somehow
       const cleaned = message.content
-        .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
+        .replace(new RegExp('<@!?' + client.user.id + '>', 'g'), '')
         .replace(/<@&\d+>/g, '')
         .replace(/@everyone/gi, '')
         .replace(/@here/gi, '')
         .trim();
-      // If after stripping mentions there's nothing useful and they only mass-pinged, skip
-      if (!cleaned && (message.mentions.roles.size > 0 || message.content.includes('@everyone'))) {
-        // still allow empty → help only when bot was intentionally pinged alone-ish
+
+      // Skip if this is mostly a mass role ping with no real question
+      if (!cleaned && message.mentions.roles.size > 0) {
+        // no-op
+      } else {
+        await message.channel.sendTyping().catch(() => {});
+        let replyText = await askOpenAI(cleaned || 'Say hello briefly and offer help.', message.author.username);
+        if (!replyText) {
+          replyText = ultimateFaqReply(cleaned || 'help');
+          if (OPENAI_API_KEY && OPENAI_API_KEY.startsWith('project-')) {
+            replyText =
+              'AI key looks like a **project id** (project-...). Put the real API key (sk-...) in env OPENAI_API_KEY.\n\n' +
+              replyText;
+          } else if (!OPENAI_API_KEY) {
+            replyText = 'AI is not configured yet (set OPENAI_API_KEY).\n\n' + replyText;
+          }
+        }
+        await message.reply({ content: replyText, allowedMentions: { repliedUser: true, parse: [] } }).catch(() => {});
       }
-      const reply = ultimateFaqReply(cleaned || 'help');
-      await message.reply(reply).catch(() => {});
     }
   } catch (e) {
-    console.error('faq:', e.message);
+    console.error('ai:', e.message);
   }
+
 
   // Vouch auto-thanks disabled for Flare (no vouch channel required)
 
@@ -2299,10 +2519,24 @@ client.on('messageCreate', async (message) => {
     console.error('automod:', e.message);
   }
 
+
+  // Auto-reactions
+  try {
+    const rules = data.autoreact?.[message.guild.id];
+    if (rules?.length && message.content && !message.author.bot) {
+      const lower = message.content.toLowerCase();
+      for (const r of rules) {
+        if (r.trigger && lower.includes(r.trigger)) {
+          await message.react(r.emoji).catch(() => {});
+        }
+      }
+    }
+  } catch (_) {}
+
   // ========== COUNTING CHANNEL ==========
   try {
     const countData = data.counting[message.channel.id];
-    if (countData && !message.content.startsWith(PREFIX)) {
+    if (countData && !detectPrefix(message.content)) {
       const content = message.content.trim();
       // Only pure numbers count
       if (/^\d+$/.test(content)) {
@@ -2338,11 +2572,26 @@ client.on('messageCreate', async (message) => {
     console.error('Counting error:', e.message);
   }
 
-  if (!message.content.startsWith(PREFIX)) return;
+  const usedPrefix = detectPrefix(message.content);
+  if (!usedPrefix) return;
+  if (message.author.bot) return;
 
-  const body = message.content.slice(PREFIX.length).trim();
+  const body = message.content.slice(usedPrefix.length).trim();
   const args = body.split(/\s+/);
   const cmd = (args.shift() || '').toLowerCase();
+  if (!cmd) return;
+
+  let expected = expectedPrefixFor(cmd);
+  // ! is valid mod prefix
+  const modPrefixes = new Set([PREFIX_MOD, PREFIX_MOD_ALT].filter(Boolean));
+  if (expected === PREFIX_MOD && modPrefixes.has(usedPrefix)) expected = usedPrefix;
+  if (expected && usedPrefix !== expected) {
+    return message.reply(
+      `Use \`${expected}${cmd}\` for this command.\n` +
+        `\`${PREFIX_STATS}\` stats · \`${PREFIX_STOCK}\` stock · \`${PREFIX_MOD}\`/\`${PREFIX_MOD_ALT}\` mod`
+    ).catch(() => {});
+  }
+
   if (!cmd) return;
 
   // ========== -best @role ==========
@@ -4903,6 +5152,73 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
   }
 
 
+
+  // ========== ?autorole on join ==========
+  if (cmd === 'autorole' || cmd === 'autoroles') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const sub = (args[0] || '').toLowerCase();
+    if (!data.autorole) data.autorole = {};
+    if (sub === 'set' || sub === 'add') {
+      const role = message.mentions.roles.first();
+      if (!role) return message.reply(`Usage: \`${PREFIX_MOD}autorole set @role\``);
+      data.autorole[message.guild.id] = role.id;
+      saveData();
+      return message.reply(`Auto-role set to **${role.name}**.`);
+    }
+    if (sub === 'off' || sub === 'clear') {
+      delete data.autorole[message.guild.id];
+      saveData();
+      return message.reply('Auto-role cleared.');
+    }
+    const id = data.autorole[message.guild.id];
+    return message.reply(id ? `Auto-role: <@&${id}>` : 'No auto-role set.');
+  }
+
+  // ========== ?autoreact ==========
+  if (cmd === 'autoreact' || cmd === 'autoreaction' || cmd === 'react') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const sub = (args[0] || '').toLowerCase();
+    if (!data.autoreact) data.autoreact = {};
+    if (!data.autoreact[message.guild.id]) data.autoreact[message.guild.id] = [];
+    const list = data.autoreact[message.guild.id];
+    if (sub === 'add') {
+      const trigger = (args[1] || '').toLowerCase();
+      const emoji = args[2];
+      if (!trigger || !emoji) return message.reply(`Usage: \`${PREFIX_MOD}autoreact add <word> <emoji>\``);
+      list.push({ trigger, emoji });
+      saveData();
+      return message.reply(`Will react with ${emoji} when someone says **${trigger}**.`);
+    }
+    if (sub === 'list') {
+      if (!list.length) return message.reply('No auto-reactions.');
+      return message.reply(list.map((x, i) => `**${i + 1}.** \`${x.trigger}\` → ${x.emoji}`).join('\n'));
+    }
+    if (sub === 'remove' || sub === 'rm') {
+      const n = parseInt(args[1], 10) - 1;
+      if (n < 0 || n >= list.length) return message.reply('Invalid number.');
+      const removed = list.splice(n, 1);
+      saveData();
+      return message.reply(`Removed \`${removed[0].trigger}\`.`);
+    }
+    return message.reply(`Usage: \`${PREFIX_MOD}autoreact add|list|remove\``);
+  }
+
+  // ========== ?unban ==========
+  if (cmd === 'unban') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const id = (args[0] || '').replace(/[<@!>]/g, '');
+    if (!id) return message.reply(`Usage: \`${PREFIX_MOD}unban <userId>\``);
+    await message.guild.members.unban(id).catch(() => null);
+    return message.reply(`Unbanned \`${id}\`.`);
+  }
+
+  // ========== ?modhelp ==========
+  if (cmd === 'modhelp' || cmd === 'commands' || (cmd === 'help' && (usedPrefix === PREFIX_MOD || usedPrefix === PREFIX_MOD_ALT || usedPrefix === PREFIX_STATS || usedPrefix === PREFIX_STOCK))) {
+    const embeds = buildFullHelpEmbeds();
+    return message.reply({ embeds: embeds.slice(0, 4) });
+  }
+
+
   // ========== -protection (saved in data, not env) ==========
   if (cmd === 'protection' || cmd === 'automod' || cmd === 'security') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -5308,75 +5624,9 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
 
 
   if (cmd === 'help') {
-    const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setTitle('Flare Staff Bot — Commands')
-      .setDescription(
-        [
-          '**Leaderboard**',
-          '`-best @role` — top members by messages + invites',
-          '',
-          '**MCFA Stock**',
-          '`-mcfa` / `-stock` — stock count',
-          '`-mcfa list` — show all accounts',
-          '`-mcfa add mail:pass` — add accounts',
-          '`-mcfa clear` or `-clear` — clear MCFA stock',
-          '`-mcfa export #channel` — upload export_N.txt of stock',
-                    '`-stock list` — all product counts (emoji UI)',
-          '`-mcfa/-donut/-hypixel/-nitro/-netflix/-steam/-crunchyroll/-xbox` — stock cmds',
-          '`-pay @user [product] [n]` — pay + yes/no vouch flow',
-          '`-staff apply` · OPEN/CLOSED — staff applications (tickets)',
-          '`-birthday gift @user` — owner only',
-          '`-pay @user` / `-pay @user netflix 2` — pay with vouch flow',
-          '`-hit add hypixel/donut/both` · `-hit start/stop/list/export` — hits',
-          '',
-          '**Salary**',
-          '`-salary @user` / `-salary @user 3` — salary DM *(restricted)*',
-          '',
-          '**Custom Stock**',
-          '`-custom` — custom stock count',
-          '`-custom list` — show all custom items',
-          '`-custom add <text>` — add custom item(s)',
-          '`-custom clear` — clear custom stock',
-          '`-custom export #channel` — upload export_N.txt',
-          '`-custompay @user` — DM 1 item to one user',
-          '`-custompay @role` — DM 1 item to every member in the role',
-          '',
-          '**Staff Management**',
-          '-staffstats` — premium staff team overview',
-          '`-claim` — claim invite reward (in tickets)',
-          '`-daily @role N` — random pick from role *(Head Admin+)*',
-          '`-daily pay @user` — daily spin Custom/MCFA *(Head Admin+)*',
-          '`-online @role` — show online members in a role',
-          '`-count #channel` — enable counting game',
-          '`-count status` — counting status',
-          '`-count reset` — reset count to 0',
-          '`-count off` — disable counting',
-          '',
-          '**Team Finder**',
-          '`-team <game> <info> <time>` — LFG post',
-          '`-teamup @user(s)` — create private TeamUp channel',
-          '`-close` / `-leave` — inside TeamUp channels',
-          '',
-          '**Flare Economy**',
-          '`-flare` — show your coins',
-          '`-flare @user` — show someone\'s coins',
-          '`-flare give @user <amt>` — send coins',
-          '`-flare daily` — claim daily reward',
-          '`-flare cf <amt> <head|tail>` — coin flip',
-          '`-flare top` — richest users',
-          '`-flare add <amt> [@user]` — add coins (Owner/Co-Owner)',
-          '',
-          '**Other**',
-          '`-format email:pass` — validate email domain/format (no login)',
-          '`-help` — this message'
-        ].join('\n')
-      )
-      .setFooter({ text: 'Most commands are staff-only' })
-      .setTimestamp();
-
-    return message.reply({ embeds: [embed] });
+    return message.reply({ embeds: buildFullHelpEmbeds().slice(0, 4) });
   }
+
 
 });
 
@@ -5503,10 +5753,15 @@ client.on('interactionCreate', async (interaction) => {
   try {
 
     if (interaction.isModalSubmit()) {
-      if (interaction.customId === 'ticket_open_modal') {
+      if (interaction.customId === 'ticket_open_modal' || String(interaction.customId || '').startsWith('ticket_open_modal:')) {
         await interaction.deferReply({ ephemeral: true });
         try {
-          const reason = interaction.fields.getTextInputValue('ticket_reason')?.trim() || 'support';
+          const kind = String(interaction.customId).includes(':')
+            ? String(interaction.customId).split(':')[1]
+            : 'support';
+          const reason =
+            (interaction.fields.getTextInputValue('ticket_reason')?.trim() || kind) +
+            (kind !== 'support' ? ` [${kind}]` : '');
           const existing = interaction.guild.channels.cache.find(
             (c) =>
               c.topic &&
@@ -5591,7 +5846,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      if (id === 'ticket_open') {
+      if (id === 'ticket_open' || id === 'ticket_open_support' || id === 'ticket_open_claim' || id === 'ticket_open_report') {
         const existing = interaction.guild.channels.cache.find(
           (c) =>
             c.topic &&
@@ -5601,13 +5856,14 @@ client.on('interactionCreate', async (interaction) => {
         if (existing) {
           return interaction.reply({ content: `You already have ${existing}`, ephemeral: true });
         }
+        const kind = id === 'ticket_open_claim' ? 'claim' : id === 'ticket_open_report' ? 'report' : 'support';
         const modal = new ModalBuilder()
-          .setCustomId('ticket_open_modal')
-          .setTitle('Open ticket');
+          .setCustomId('ticket_open_modal:' + kind)
+          .setTitle(kind === 'claim' ? 'Claim reward' : kind === 'report' ? 'Report' : 'Support ticket');
         const reasonInput = new TextInputBuilder()
           .setCustomId('ticket_reason')
-          .setLabel('Why are you opening a ticket?')
-          .setPlaceholder('e.g. help, claim reward… (optional)')
+          .setLabel(kind === 'claim' ? 'What are you claiming?' : kind === 'report' ? 'What happened?' : 'How can we help?')
+          .setPlaceholder('Optional details…')
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(false)
           .setMaxLength(500);
