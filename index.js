@@ -23,7 +23,7 @@ const {
   Routes
 } = require('discord.js');
 
-const TOKEN = process.env.DISCORD_BOT_TOKEN;
+const TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '').trim().replace(/^['"]|['"]$/g, '');
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
 const PREFIX = process.env.PREFIX || '-'; // legacy default
 const PREFIX_STATS = process.env.PREFIX_STATS || '-'; // invites, messages, si, lb
@@ -688,18 +688,24 @@ const recentChannelRenames = new Map();
 const hitRunner = { running: false, timer: null, channelId: null, index: 0, queue: [] };
 
 
+const botIntents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+  GatewayIntentBits.MessageContent,
+  GatewayIntentBits.GuildMembers,
+  GatewayIntentBits.GuildInvites,
+  GatewayIntentBits.DirectMessages
+];
+// Presence is privileged — only enable if portal has it ON (else Discord drops the connection)
+if (process.env.PRESENCE_INTENT === 'true' || process.env.PRESENCE_INTENT === '1') {
+  botIntents.push(GatewayIntentBits.GuildPresences);
+}
+
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildInvites,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildPresences
-  ],
+  intents: botIntents,
   partials: [Partials.Channel]
 });
+console.log('Discord intents ready. Presence intent:', botIntents.includes(GatewayIntentBits.GuildPresences));
 
 function isStaff(member) {
   if (!member) return false;
@@ -6815,15 +6821,35 @@ client.on('guildBanAdd', async (ban) => {
 });
 
 
+process.stdout.write('Boot: about to connect Discord...\n');
+console.log('Token chars:', TOKEN.length, '| starts with:', TOKEN.slice(0, 4) || '(empty)');
+
 client.on('error', (e) => console.error('Discord client error:', e.message));
 client.on('shardError', (e) => console.error('Discord shard error:', e.message));
+client.on('warn', (m) => console.warn('Discord warn:', m));
+
+const loginTimer = setTimeout(() => {
+  console.error('Still no Discord READY after 25s. Token/intents/network problem.');
+}, 25000);
+
+client.once('ready', () => {
+  clearTimeout(loginTimer);
+});
+client.once('clientReady', () => {
+  clearTimeout(loginTimer);
+});
 
 client
   .login(TOKEN)
-  .then(() => console.log('Discord gateway login OK (waiting for ready…)'))
+  .then(() => {
+    process.stdout.write('Discord login() resolved — waiting READY event...\n');
+  })
   .catch((e) => {
-    console.error('DISCORD LOGIN FAILED:', e.message || e);
-    console.error('Check DISCORD_BOT_TOKEN on Render + Message Content / Members / Presence intents in Developer Portal.');
-    // Keep HTTP up so dashboard still works, but bot stays offline
+    clearTimeout(loginTimer);
+    console.error('DISCORD LOGIN FAILED:', e && (e.message || e));
+    if (String(e.message || e).includes('intent')) {
+      console.error('Turn ON Message Content Intent + Server Members Intent in Discord Developer Portal → Bot.');
+    }
   });
+
 
