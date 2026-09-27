@@ -2002,12 +2002,14 @@ async function askOpenAI(userText, username) {
   let model = (OPENAI_MODEL || '').trim();
   if (!model) {
     model = /^gsk_/i.test(key) || /groq\.com/i.test(base)
-      ? 'llama-3.1-8b-instant'
+      ? 'openai/gpt-oss-20b'
       : 'gpt-4o-mini';
   }
-  // If someone left OPENAI_MODEL=gpt-4o-mini with a Groq key, switch to a Groq model
-  if (/^gsk_/i.test(key) && /gpt-4|gpt-3|o1|o3/i.test(model)) {
-    model = 'llama-3.1-8b-instant';
+  // Map dead/wrong models when using Groq
+  if (/^gsk_/i.test(key) || /groq\.com/i.test(base)) {
+    if (/gpt-4o|gpt-4|gpt-3|o1|o3|llama-3\.1-8b|llama-3\.3-70b/i.test(model)) {
+      model = 'openai/gpt-oss-20b';
+    }
   }
 
   const headers = {
@@ -6813,4 +6815,15 @@ client.on('guildBanAdd', async (ban) => {
 });
 
 
-client.login(TOKEN);
+client.on('error', (e) => console.error('Discord client error:', e.message));
+client.on('shardError', (e) => console.error('Discord shard error:', e.message));
+
+client
+  .login(TOKEN)
+  .then(() => console.log('Discord gateway login OK (waiting for ready…)'))
+  .catch((e) => {
+    console.error('DISCORD LOGIN FAILED:', e.message || e);
+    console.error('Check DISCORD_BOT_TOKEN on Render + Message Content / Members / Presence intents in Developer Portal.');
+    // Keep HTTP up so dashboard still works, but bot stays offline
+  });
+
