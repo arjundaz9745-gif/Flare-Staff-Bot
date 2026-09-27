@@ -697,7 +697,8 @@ const botIntents = [
   GatewayIntentBits.DirectMessages
 ];
 // Presence is privileged — only enable if portal has it ON (else Discord drops the connection)
-if (process.env.PRESENCE_INTENT === 'true' || process.env.PRESENCE_INTENT === '1') {
+// Presence ON by default (turn off with PRESENCE_INTENT=false if portal doesn't have it)
+if (process.env.PRESENCE_INTENT !== 'false' && process.env.PRESENCE_INTENT !== '0') {
   botIntents.push(GatewayIntentBits.GuildPresences);
 }
 
@@ -6821,35 +6822,49 @@ client.on('guildBanAdd', async (ban) => {
 });
 
 
-process.stdout.write('Boot: about to connect Discord...\n');
-console.log('Token chars:', TOKEN.length, '| starts with:', TOKEN.slice(0, 4) || '(empty)');
+(async () => {
+  process.stdout.write('Boot: about to connect Discord...\n');
+  console.log('Token chars:', TOKEN.length, '| starts with:', (TOKEN || '').slice(0, 4) || '(empty)');
 
-client.on('error', (e) => console.error('Discord client error:', e.message));
-client.on('shardError', (e) => console.error('Discord shard error:', e.message));
-client.on('warn', (m) => console.warn('Discord warn:', m));
-
-const loginTimer = setTimeout(() => {
-  console.error('Still no Discord READY after 25s. Token/intents/network problem.');
-}, 25000);
-
-client.once('ready', () => {
-  clearTimeout(loginTimer);
-});
-client.once('clientReady', () => {
-  clearTimeout(loginTimer);
-});
-
-client
-  .login(TOKEN)
-  .then(() => {
-    process.stdout.write('Discord login() resolved — waiting READY event...\n');
-  })
-  .catch((e) => {
-    clearTimeout(loginTimer);
-    console.error('DISCORD LOGIN FAILED:', e && (e.message || e));
-    if (String(e.message || e).includes('intent')) {
-      console.error('Turn ON Message Content Intent + Server Members Intent in Discord Developer Portal → Bot.');
+  // 1) Validate token with REST before gateway (fails fast if bad token)
+  try {
+    const res = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: 'Bot ' + TOKEN }
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('TOKEN CHECK FAILED:', res.status, body.message || JSON.stringify(body));
+      console.error('Reset token in Discord Developer Portal → Bot, paste into Render DISCORD_BOT_TOKEN, redeploy.');
+      return;
     }
-  });
+    console.log('TOKEN OK — bot user:', body.username + '#' + (body.discriminator || '0'), 'id:', body.id);
+  } catch (e) {
+    console.error('TOKEN CHECK network error:', e.message);
+    console.error('Render cannot reach discord.com — try redeploy or different host.');
+    return;
+  }
+
+  client.on('error', (e) => console.error('Discord client error:', e.message));
+  client.on('shardError', (e) => console.error('Discord shard error:', e.message));
+  client.on('warn', (m) => console.warn('Discord warn:', m));
+
+  const loginTimer = setTimeout(() => {
+    console.error('Still no Discord READY after 25s. Enable Message Content + Server Members intents, then reset token.');
+  }, 25000);
+
+  const clearT = () => clearTimeout(loginTimer);
+  client.once('ready', clearT);
+  client.once('clientReady', clearT);
+
+  try {
+    await client.login(TOKEN);
+    process.stdout.write('Discord login() resolved — should be online now.\n');
+  } catch (e) {
+    clearT();
+    console.error('DISCORD LOGIN FAILED:', e && (e.message || e));
+    console.error('Enable intents: Message Content + Server Members (Developer Portal → Bot).');
+  }
+})();
+
 
 
