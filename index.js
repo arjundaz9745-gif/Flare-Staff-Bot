@@ -37,8 +37,10 @@ const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
 
 const PORT = process.env.PORT || 3000;
 // OpenAI — key usually starts with sk- (not project-). project- is often a Project ID.
-const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || process.env.CHATGPT_API_KEY || '').trim();
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || process.env.CHATGPT_API_KEY || process.env.GROQ_API_KEY || '').trim();
+// Groq free: https://api.groq.com/openai/v1  | OpenAI: https://api.openai.com/v1
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.GROQ_BASE_URL || '').replace(/\/$/, '');
+const OPENAI_MODEL = process.env.OPENAI_MODEL || '';
 const AI_SYSTEM_PROMPT =
   process.env.AI_SYSTEM_PROMPT ||
   [
@@ -1981,27 +1983,49 @@ async function askOpenAI(userText, username) {
   let key = (OPENAI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!key) return null;
 
-  // Valid: sk-... and sk-proj-... (new OpenAI project keys)
-  // Invalid alone: project-xxxx without sk- prefix
+  // Valid secrets: sk-..., sk-proj-..., gsk_... (Groq)
+  // Invalid alone: project-xxxx without sk-
   if (/^project-/i.test(key) && !/^sk-/i.test(key)) {
-    console.warn('OPENAI_API_KEY is a project id only. Use the secret key sk- or sk-proj-...');
+    console.warn('OPENAI_API_KEY is a project id only. Use sk- / sk-proj- / gsk_ secret.');
     return '__BAD_KEY_FORMAT__';
+  }
+
+  // gsk_ = ALWAYS Groq (ignore OPENAI_BASE_URL if it points at openai.com)
+  let base = OPENAI_BASE_URL || '';
+  if (/^gsk_/i.test(key)) {
+    base = 'https://api.groq.com/openai/v1';
+  } else if (!base) {
+    base = 'https://api.openai.com/v1';
+  }
+  base = String(base).replace(/\/$/, '');
+
+  let model = (OPENAI_MODEL || '').trim();
+  if (!model) {
+    model = /^gsk_/i.test(key) || /groq\.com/i.test(base)
+      ? 'llama-3.1-8b-instant'
+      : 'gpt-4o-mini';
+  }
+  // If someone left OPENAI_MODEL=gpt-4o-mini with a Groq key, switch to a Groq model
+  if (/^gsk_/i.test(key) && /gpt-4|gpt-3|o1|o3/i.test(model)) {
+    model = 'llama-3.1-8b-instant';
   }
 
   const headers = {
     'Content-Type': 'application/json',
     Authorization: 'Bearer ' + key
   };
-  // Optional org/project headers if set
-  if (process.env.OPENAI_ORG_ID) headers['OpenAI-Organization'] = process.env.OPENAI_ORG_ID.trim();
-  if (process.env.OPENAI_PROJECT_ID) headers['OpenAI-Project'] = process.env.OPENAI_PROJECT_ID.trim();
+  // OpenAI org/project only (not used by Groq)
+  if (!/groq\.com/i.test(base)) {
+    if (process.env.OPENAI_ORG_ID) headers['OpenAI-Organization'] = process.env.OPENAI_ORG_ID.trim();
+    if (process.env.OPENAI_PROJECT_ID) headers['OpenAI-Project'] = process.env.OPENAI_PROJECT_ID.trim();
+  }
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(base + '/chat/completions', {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: OPENAI_MODEL || 'gpt-4o-mini',
+        model,
         temperature: 0.35,
         max_tokens: 800,
         messages: [
@@ -2019,13 +2043,13 @@ async function askOpenAI(userText, username) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const errMsg = data?.error?.message || res.statusText || String(res.status);
-      console.error('OpenAI error', res.status, errMsg);
+      console.error('AI error', base, res.status, errMsg);
       return '__API_ERROR__:' + errMsg;
     }
     const out = data?.choices?.[0]?.message?.content;
     return out && String(out).trim() ? String(out).trim().slice(0, 1900) : null;
   } catch (e) {
-    console.error('OpenAI fetch', e.message);
+    console.error('AI fetch', e.message);
     return '__API_ERROR__:' + e.message;
   }
 }
@@ -2407,7 +2431,7 @@ client.on('messageCreate', async (message) => {
         );
                 if (replyText === '__BAD_KEY_FORMAT__') {
           replyText =
-            'AI key format wrong. Use secret key in OPENAI_API_KEY (starts with sk- or sk-proj-). A bare project- id is not enough.';
+            'AI key format wrong. Use secret key in OPENAI_API_KEY (starts with sk-, sk-proj-, or gsk_). A bare project- id is not enough.';
         } else if (replyText && String(replyText).startsWith('__API_ERROR__:')) {
           const err = String(replyText).slice('__API_ERROR__:'.length);
           replyText = 'AI error: ' + err.slice(0, 200);
