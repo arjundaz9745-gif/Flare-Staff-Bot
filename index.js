@@ -41,7 +41,16 @@ const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || process.env.CHATGPT_API_KE
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const AI_SYSTEM_PROMPT =
   process.env.AI_SYSTEM_PROMPT ||
-  'You are Flare Drop helper bot for a Discord rewards server. Be short, friendly, and useful. Do not help with scams, hacking, or illegal activity. If unsure, tell them to open a support ticket.';
+  [
+    'You are the Flare Drop Discord assistant.',
+    'Answer the user question directly. No filler intros like "Hey I am here to help" or "I am a bot".',
+    'Be concise, clear, and practical. Use short paragraphs or bullets when useful.',
+    'You know this is a rewards / digital goods Discord: invites, tickets, stock (MCFA etc.), staff commands.',
+    'Prefixes: - stats (invites/messages/si/lb), $ stock/pay/gen, ? or ! moderation/tickets/giveaways.',
+    'If you lack live stock numbers, say to use $stock or open a ticket — do not invent inventory.',
+    'Refuse: scams, phishing, hacking, carding, account theft, doxxing, illegal activity.',
+    'Never claim you can ban users or change settings yourself; point to the right command or staff.'
+  ].join(' ');
 
 
 // Staff role hierarchy for -staffstats (highest first)
@@ -1969,42 +1978,55 @@ async function exportStockToChannel(message, kind, lines, label) {
 
 
 async function askOpenAI(userText, username) {
-  if (!OPENAI_API_KEY) return null;
-  const key = OPENAI_API_KEY;
-  // OpenAI secret keys are sk-... ; project- is not a valid chat key by itself
-  if (key.startsWith('project-') && !key.startsWith('sk-')) {
-    console.warn('OPENAI_API_KEY looks like a project id, not sk- key');
+  let key = (OPENAI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+  if (!key) return null;
+
+  // Valid: sk-... and sk-proj-... (new OpenAI project keys)
+  // Invalid alone: project-xxxx without sk- prefix
+  if (/^project-/i.test(key) && !/^sk-/i.test(key)) {
+    console.warn('OPENAI_API_KEY is a project id only. Use the secret key sk- or sk-proj-...');
+    return '__BAD_KEY_FORMAT__';
   }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + key
+  };
+  // Optional org/project headers if set
+  if (process.env.OPENAI_ORG_ID) headers['OpenAI-Organization'] = process.env.OPENAI_ORG_ID.trim();
+  if (process.env.OPENAI_PROJECT_ID) headers['OpenAI-Project'] = process.env.OPENAI_PROJECT_ID.trim();
+
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + key
-      },
+      headers,
       body: JSON.stringify({
-        model: OPENAI_MODEL,
-        temperature: 0.6,
-        max_tokens: 500,
+        model: OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.35,
+        max_tokens: 800,
         messages: [
           { role: 'system', content: AI_SYSTEM_PROMPT },
           {
             role: 'user',
-            content: (username ? username + ' asks: ' : '') + (userText || 'hi')
+            content:
+              userText && userText.trim()
+                ? userText.trim()
+                : 'One short useful line about Flare Drop. No intro fluff.'
           }
         ]
       })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      console.error('OpenAI error', res.status, data?.error?.message || data);
-      return null;
+      const errMsg = data?.error?.message || res.statusText || String(res.status);
+      console.error('OpenAI error', res.status, errMsg);
+      return '__API_ERROR__:' + errMsg;
     }
     const out = data?.choices?.[0]?.message?.content;
     return out && String(out).trim() ? String(out).trim().slice(0, 1900) : null;
   } catch (e) {
     console.error('OpenAI fetch', e.message);
-    return null;
+    return '__API_ERROR__:' + e.message;
   }
 }
 
@@ -2018,9 +2040,9 @@ function ultimateFaqReply(text) {
 
   if (!q || q === 'help' || /^(hi|hello|hey)\b/.test(q)) {
     return (
-      "Hey! I'm the **Flare Drop** helper.\n" +
-      "Ask me about the server, **MCFA/NFA/SFA**, invites, tickets, or products.\n" +
-      "Website: https://flaredrop.base44.app"
+      "**Flare Drop** — site: https://flaredrop.base44.app\n" +
+      "Commands: `-help` · tickets: `?ticketpanel` · stock: `$stock`\n" +
+      "Ask a specific question (invites, MCFA, tickets, prices)."
     );
   }
 
@@ -2086,14 +2108,9 @@ function ultimateFaqReply(text) {
     return "This is the **Flare Drop** server — rewards, digital products, invite events. Follow staff instructions in tickets. Website: https://flaredrop.base44.app";
   }
 
-  // Friendly general fallback (still on-topic helper, not unrestricted AI)
   return (
-    "I'm here for **Flare Drop** questions.\n" +
-    "• Website: https://flaredrop.base44.app\n" +
-    "• Products: MCFA / NFA / SFA & more\n" +
-    "• Help: open a **ticket**\n" +
-    "• Staff tools: `-help`\n\n" +
-    "Try asking about website, MCFA, tickets, invites, or prices. I can't help with bot-making or illegal stuff."
+    "Not sure on that.\n" +
+    "Site: https://flaredrop.base44.app · Ticket for staff · `$stock` / `-i` / `!help`"
   );
 }
 
@@ -2384,17 +2401,20 @@ client.on('messageCreate', async (message) => {
         // no-op
       } else {
         await message.channel.sendTyping().catch(() => {});
-        let replyText = await askOpenAI(cleaned || 'Say hello briefly and offer help.', message.author.username);
-        if (!replyText) {
+        let replyText = await askOpenAI(
+          cleaned || 'Reply in one short useful line for Flare Drop. No intro fluff.',
+          message.author.username
+        );
+                if (replyText === '__BAD_KEY_FORMAT__') {
+          replyText =
+            'AI key format wrong. Use secret key in OPENAI_API_KEY (starts with sk- or sk-proj-). A bare project- id is not enough.';
+        } else if (replyText && String(replyText).startsWith('__API_ERROR__:')) {
+          const err = String(replyText).slice('__API_ERROR__:'.length);
+          replyText = 'AI error: ' + err.slice(0, 200);
+        } else if (!replyText) {
           replyText = ultimateFaqReply(cleaned || 'help');
-          if (OPENAI_API_KEY && OPENAI_API_KEY.startsWith('project-')) {
-            replyText =
-              'AI key looks like a **project id** (project-...). Put the real API key (sk-...) in env OPENAI_API_KEY.\n\n' +
-              replyText;
-          } else if (!OPENAI_API_KEY) {
-            replyText = 'AI is not configured yet (set OPENAI_API_KEY).\n\n' + replyText;
-          }
         }
+
         await message.reply({ content: replyText, allowedMentions: { repliedUser: true, parse: [] } }).catch(() => {});
       }
     }
@@ -2581,18 +2601,8 @@ client.on('messageCreate', async (message) => {
   const cmd = (args.shift() || '').toLowerCase();
   if (!cmd) return;
 
-  let expected = expectedPrefixFor(cmd);
-  // ! is valid mod prefix
-  const modPrefixes = new Set([PREFIX_MOD, PREFIX_MOD_ALT].filter(Boolean));
-  if (expected === PREFIX_MOD && modPrefixes.has(usedPrefix)) expected = usedPrefix;
-  if (expected && usedPrefix !== expected) {
-    return message.reply(
-      `Use \`${expected}${cmd}\` for this command.\n` +
-        `\`${PREFIX_STATS}\` stats · \`${PREFIX_STOCK}\` stock · \`${PREFIX_MOD}\`/\`${PREFIX_MOD_ALT}\` mod`
-    ).catch(() => {});
-  }
+  // Preferred: - stats, $ stock, ?/! mod — commands not blocked by prefix
 
-  if (!cmd) return;
 
   // ========== -best @role ==========
   if (cmd === 'best') {
