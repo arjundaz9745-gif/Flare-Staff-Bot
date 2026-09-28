@@ -833,21 +833,25 @@ function getUserInvites(guildId, userId) {
 function buildFalconInviteEmbed(user, guildId) {
   const b = getInviteBreakdown(guildId, user.id);
   return new EmbedBuilder()
-    .setColor(0x5865f2)
+    .setColor(0x2f3136)
     .setAuthor({
-      name: `${user.username}'s invites`,
+      name: user.username,
       iconURL: user.displayAvatarURL({ size: 128 })
     })
     .setThumbnail(user.displayAvatarURL({ size: 256 }))
     .setDescription(
-      `**Total** \`${b.total}\`\n\n` +
-        `**Regular** \`${b.regular}\`\n` +
-        `**Bonus** \`${b.bonus}\`\n` +
-        `**Fake** \`${b.fake}\`\n` +
-        `**Leaves** \`${b.leaves}\`\n` +
-        `**Joins** \`${b.joins}\``
+      `**${user.username}** has **${b.total}** invites\n` +
+        `\`${b.regular}\` regular · \`${b.bonus}\` bonus · \`${b.leaves}\` left · \`${b.fake}\` fake`
     )
-    .setFooter({ text: 'Invite tracker · Joins − leaves − fake + bonus = total' })
+    .addFields(
+      { name: 'Total', value: `**${b.total}**`, inline: true },
+      { name: 'Regular', value: `**${b.regular}**`, inline: true },
+      { name: 'Bonus', value: `**${b.bonus}**`, inline: true },
+      { name: 'Joins', value: `${b.joins}`, inline: true },
+      { name: 'Leaves', value: `${b.leaves}`, inline: true },
+      { name: 'Fake', value: `${b.fake}`, inline: true }
+    )
+    .setFooter({ text: 'total = (joins − leaves − fake) + bonus' })
     .setTimestamp();
 }
 
@@ -1047,7 +1051,7 @@ async function startRewardClaimFlow(channel, user) {
 
   collector.on('end', async (_, reason) => {
     if (reason !== 'chosen') {
-      await channel.send(`${user} Reward selection timed out. Use \`-claim\` to try again.`).catch(() => {});
+      await channel.send(`${user} Reward selection timed out. Use \`$claim\` to try again.`).catch(() => {});
     }
   });
 }
@@ -1502,7 +1506,7 @@ const MOD_CMDS = new Set([
   'roleinfo', 'channelinfo', 'emoji', 'emojis',
   'addrole', 'removerole', 'softban', 'massban',
   'hide', 'show', 'snipe', 'editsnipe',
-  'afk', 'remind', 'reminder', 'ping', 'uptime',
+  'afk', 'remind', 'reminder', 'ping', 'uptime', 'steal', 'addemoji',
   'membercount', 'botinfo', 'invite', 'support',
   'modhelp', 'help'
 ]);
@@ -2123,7 +2127,7 @@ function ultimateFaqReply(text) {
 
   if (/(invite|reward|claim|milestone)/i.test(q)) {
     return (
-      "Create a **permanent invite**, invite real friends, hit a milestone, then open a ticket and use **`-claim`** (or follow the ticket bot) to pick your reward.\n" +
+      "Create a **permanent invite**, invite real friends, hit a milestone, then open a ticket and use **`$claim`** (or follow the ticket bot) to pick your reward.\n" +
       "Fake/J4J invites don't count."
     );
   }
@@ -3812,11 +3816,11 @@ if (sub === 'clear') {
   }
 
 
-  // ========== -claim ==========
+  // ========== $claim ==========
   // In a ticket: show eligible rewards based on invites, then ping online staff
   if (cmd === 'claim') {
     if (!isTicketChannel(message.channel)) {
-      return message.reply('`-claim` only works **inside tickets**.');
+      return message.reply('`$claim` only works **inside tickets**.');
     }
     await startRewardClaimFlow(message.channel, message.author);
     return;
@@ -4951,6 +4955,35 @@ ${message.author}'s **staff application is ready** — please review.`
     return message.reply(`Softbanned **${user.tag}** (ban + unban, messages cleaned).`);
   }
 
+
+  // ========== !steal <emoji> — add custom emoji to this server ==========
+  if (cmd === 'steal' || cmd === 'addemoji') {
+    const canEmoji =
+      isStaff(message.member) ||
+      message.member.permissions.has(PermissionFlagsBits.Administrator) ||
+      message.member.permissions.has(PermissionFlagsBits.ManageGuildExpressions) ||
+      message.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers);
+    if (!canEmoji) {
+      return message.reply('Need **Manage Expressions** permission or staff.');
+    }
+    const raw = args[0] || '';
+    const match = raw.match(/<(a?):([a-zA-Z0-9_]+):(\d+)>/);
+    if (!match) {
+      return message.reply('Usage: `!steal <custom emoji>` — paste a custom emoji from any server.');
+    }
+    const animated = match[1] === 'a';
+    let name = (args[1] || match[2]).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+    if (!name || name.length < 2) name = 'emoji' + Date.now().toString().slice(-4);
+    const id = match[3];
+    const url = `https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}?size=128&quality=lossless`;
+    try {
+      const emoji = await message.guild.emojis.create({ attachment: url, name });
+      return message.reply(`Added ${emoji} as \`:${emoji.name}:\``);
+    } catch (e) {
+      return message.reply('Failed to steal emoji: ' + (e.message || e) + ' (need Manage Expressions + emoji slots).');
+    }
+  }
+
   // ========== ?say / ?embed / ?announce ==========
   if (cmd === 'say') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -5834,20 +5867,75 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
   }
 
-  // ========== -removeinvite @user [amount] ==========
+  // ========== -rmi / -removeinvite ==========
+  // -rmi              → remove YOUR invites (all joins+bonus → 0)
+  // -rmi 5            → remove 5 of YOUR joins
+  // -rmi @user [n]    → staff: remove n joins from user (default 1)
+  // -rmi @user all    → staff: wipe that user's invite stats
   if (cmd === 'removeinvite' || cmd === 'removeinvites' || cmd === 'rinv' || cmd === 'rmi') {
-    if (!isStaff(message.member)) return message.reply('Staff only.');
-    const u = message.mentions.users.first();
-    const amount = parseInt(args.find((a) => /^\d+$/.test(a)), 10) || 1;
-    if (!u) return message.reply(`Usage: \`${PREFIX}removeinvite @user [amount]\``);
     const gid = message.guild.id;
+    const mentioned = message.mentions.users.first();
+    const numArg = args.find((a) => /^\d+$/.test(a));
+    const allArg = args.some((a) => /^(all|full|wipe)$/i.test(a));
+    const amount = numArg ? parseInt(numArg, 10) : null;
+
+    // Targeting someone else requires staff
+    if (mentioned && mentioned.id !== message.author.id && !isStaff(message.member)) {
+      return message.reply('You can only remove **your own** invites. Staff can use `-rmi @user`.');
+    }
+
+    const u = mentioned || message.author;
     const s = ensureInviteStats(gid, u.id);
-    s.joins = Math.max(0, (s.joins || 0) - amount);
+
+    if (allArg || (amount === null && !mentioned && args.length === 0)) {
+      // Full wipe for self (or staff on user with "all")
+      if (mentioned && !allArg && amount === null) {
+        // -rmi @user with no number → remove 1 join (staff)
+      } else if (!mentioned && args.length === 0) {
+        // -rmi alone → wipe own invites
+        s.joins = 0;
+        s.leaves = 0;
+        s.fake = 0;
+        s.bonus = 0;
+        if (!data.invites[gid]) data.invites[gid] = {};
+        data.invites[gid][u.id] = 0;
+        if (data.falconInvites?.[gid]) delete data.falconInvites[gid][u.id];
+        saveData();
+        return message.reply({
+          content: `Your invites were **reset to 0**.`,
+          embeds: [buildFalconInviteEmbed(u, gid)]
+        });
+      }
+    }
+
+    if (allArg) {
+      s.joins = 0;
+      s.leaves = 0;
+      s.fake = 0;
+      s.bonus = 0;
+      if (!data.invites[gid]) data.invites[gid] = {};
+      data.invites[gid][u.id] = 0;
+      if (data.falconInvites?.[gid]) delete data.falconInvites[gid][u.id];
+      saveData();
+      return message.reply({
+        content: `Wiped invite stats for **${u.username}**.`,
+        embeds: [buildFalconInviteEmbed(u, gid)]
+      });
+    }
+
+    const n = amount || 1;
+    const before = getInviteBreakdown(gid, u.id).total;
+    s.joins = Math.max(0, (s.joins || 0) - n);
+    // Also reduce bonus if joins already 0 and still want removal
+    if ((s.joins || 0) === 0 && n > 0 && (s.bonus || 0) > 0 && amount) {
+      // only if they asked more than joins available - handled by joins max 0
+    }
     if (!data.invites[gid]) data.invites[gid] = {};
     data.invites[gid][u.id] = getInviteBreakdown(gid, u.id).total;
     saveData();
+    const after = getInviteBreakdown(gid, u.id).total;
     return message.reply({
-      content: `Removed **${amount}** join(s) from **${u.username}**.`,
+      content: `Removed **${n}** join(s) from **${u.username}** · total **${before}** → **${after}**`,
       embeds: [buildFalconInviteEmbed(u, gid)]
     });
   }
@@ -5987,7 +6075,7 @@ client.on('channelCreate', async (channel) => {
 
     if (!opener) {
       await channel.send(
-        '🎁 Welcome! Use `-claim` to choose a reward based on your invites.'
+        '🎁 Welcome! Use `$claim` to choose a reward based on your invites.'
       ).catch(() => {});
       return;
     }
@@ -6843,7 +6931,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'claim') {
         return reply({
-          content: 'Use `-claim` inside your reward **ticket** channel for the full claim flow.',
+          content: 'Use `$claim` inside your reward **ticket** channel for the full claim flow.',
           ephemeral: true
         });
       }
