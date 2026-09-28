@@ -37,6 +37,18 @@ const FLARE_GUILD_ID = process.env.GUILD_ID || process.env.FLARE_GUILD_ID || '15
 const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
 
 const PORT = process.env.PORT || 3000;
+
+const BRAND = {
+  color: 0x1abc9c,
+  colorDark: 0x2b2d31,
+  colorPink: 0xbe2c71,
+  colorRed: 0xed4245,
+  colorGreen: 0x57f287,
+  colorBlurple: 0x5865f2,
+  footer: 'Coded by DashWho · Enhanced by ! Abu Farhan',
+  name: 'Flare Drop'
+};
+
 // OpenAI — key usually starts with sk- (not project-). project- is often a Project ID.
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || process.env.CHATGPT_API_KEY || process.env.GROQ_API_KEY || '').trim();
 // Groq free: https://api.groq.com/openai/v1  | OpenAI: https://api.openai.com/v1
@@ -775,7 +787,7 @@ function buildTeamupPanel(team) {
       `\`-leave\` — leave this TeamUp\n` +
       `\`-close\` — close & delete (creator/staff)`
     )
-    .setFooter({ text: 'Flare Drop • TeamUp' })
+    .setFooter({ text: BRAND.footer })
     .setTimestamp();
 }
 
@@ -863,28 +875,24 @@ function randomMathChallenge() {
 if (!global.__flarePendingVerify) global.__flarePendingVerify = new Map();
 const pendingVerify = global.__flarePendingVerify;
 
-function buildFalconInviteEmbed(user, guildId) {
+function buildFalconInviteEmbed(user, guildId, requestedBy) {
   const b = getInviteBreakdown(guildId, user.id);
+  const rejoins = (data.inviteStats?.[guildId]?.[user.id]?.rejoins) || 0;
+  const display = user.globalName || user.username;
   return new EmbedBuilder()
-    .setColor(0x2f3136)
-    .setAuthor({
-      name: user.username,
-      iconURL: user.displayAvatarURL({ size: 128 })
-    })
+    .setColor(BRAND.color)
+    .setTitle('Invite log')
     .setThumbnail(user.displayAvatarURL({ size: 256 }))
-    .setDescription(
-      `**${user.username}** has **${b.total}** invites\n` +
-        `\`${b.regular}\` regular · \`${b.bonus}\` bonus · \`${b.leaves}\` left · \`${b.fake}\` fake`
-    )
+    .setDescription(`≫ **${display}** has **${b.total}** invites`)
     .addFields(
-      { name: 'Total', value: `**${b.total}**`, inline: true },
-      { name: 'Regular', value: `**${b.regular}**`, inline: true },
-      { name: 'Bonus', value: `**${b.bonus}**`, inline: true },
-      { name: 'Joins', value: `${b.joins}`, inline: true },
-      { name: 'Leaves', value: `${b.leaves}`, inline: true },
-      { name: 'Fake', value: `${b.fake}`, inline: true }
+      { name: 'Joins', value: String(b.joins), inline: false },
+      { name: 'Left', value: String(b.leaves), inline: false },
+      { name: 'Fake', value: String(b.fake), inline: false },
+      { name: 'Rejoins', value: `${rejoins} (7d)`, inline: false }
     )
-    .setFooter({ text: 'total = (joins − leaves − fake) + bonus' })
+    .setFooter({
+      text: (requestedBy ? `Requested by ${requestedBy} · ` : '') + BRAND.footer
+    })
     .setTimestamp();
 }
 
@@ -967,10 +975,10 @@ function buildRewardMenuEmbed(user, inviteCount, eligible) {
   }
 
   return new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle('🎁 Claim Your Reward')
+    .setColor(BRAND.color)
+    .setTitle('Claim your reward')
     .setDescription(desc)
-    .setFooter({ text: 'Flare Drop • Invite Claim' })
+    .setFooter({ text: BRAND.footer })
     .setTimestamp();
 }
 
@@ -1075,7 +1083,7 @@ async function startRewardClaimFlow(channel, user) {
           `# ARE WE LEGIT?\n` +
           `If there is any login issue, reply here and ping staff.`
       )
-      .setFooter({ text: 'Flare Drop • Auto claim' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp();
 
     await channel.send({ content: `${user}`, embeds: [deliverEmbed] }).catch(() => {});
@@ -1341,7 +1349,7 @@ async function postTicketPanel(channel, { description, bannerUrl, bannerAttachme
       { name: 'Claim', value: 'Invite rewards / payouts', inline: true },
       { name: 'Report', value: 'Issues or reports', inline: true }
     )
-    .setFooter({ text: 'Flare Drop · Tickets' })
+    .setFooter({ text: BRAND.footer })
     .setTimestamp();
   if (bannerUrl) embed.setImage(bannerUrl);
 
@@ -1412,7 +1420,7 @@ async function createSupportTicket(guild, user, reason) {
         `Staff has been notified. Share any proof here if needed.\n\n` +
         `_Close with the button below when you are done._`
     )
-    .setFooter({ text: 'Flare Drop · Support' })
+    .setFooter({ text: BRAND.footer })
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
@@ -1448,7 +1456,7 @@ async function protectionLog(guild, title, description, color = 0xed4245) {
           .setTitle(title)
           .setDescription(description)
           .setTimestamp()
-          .setFooter({ text: 'Flare Protection' })
+          .setFooter({ text: BRAND.footer })
       ]
     }).catch(() => {});
   } catch (_) {}
@@ -1639,10 +1647,11 @@ function buildFullHelpEmbeds() {
   ];
   return pages.map((p, i) =>
     new EmbedBuilder()
-      .setColor(0xbe2c71)
+      .setColor(BRAND.colorDark)
       .setTitle(p.title)
       .setDescription(p.desc)
-      .setFooter({ text: 'Page ' + (i + 1) + '/' + pages.length + ' · Flare Drop' })
+      .setFooter({ text: `Page ${i + 1}/${pages.length} · ${BRAND.footer}` })
+      .setTimestamp()
   );
 }
 
@@ -2303,7 +2312,7 @@ function buildGiveawayLiveEmbed(g, hostTag) {
         (hostTag ? `**Hosted by** · ${hostTag}\n` : '') +
         `\nClick **Enter** below to join.`
     )
-    .setFooter({ text: 'Good luck · Flare Drop' })
+    .setFooter({ text: BRAND.footer })
     .setTimestamp(g.ends || Date.now());
 }
 
@@ -2374,7 +2383,7 @@ async function endGiveaway(messageId, reroll = false) {
             ? `Prize: **${g.prize}**\n\nPlease open a ticket or wait for staff to deliver your reward.`
             : `Prize **${g.prize}** had no entries.`
         )
-        .setFooter({ text: 'Flare Drop · Giveaways' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp()
     ]
   }).catch(() => {});
@@ -2460,7 +2469,7 @@ client.on('messageCreate', async (message) => {
             .setColor(0x57f287)
             .setTitle('Verified!')
             .setDescription(`You are verified in **${guild.name}**. Welcome!`)
-            .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+            .setFooter({ text: BRAND.footer })
         ]
       }).catch(() => {});
     } catch (e) {
@@ -3433,7 +3442,7 @@ if (sub === 'clear') {
           `Added **${amount.toLocaleString()}** coins to **${target.username}**\n` +
           `New balance: **${getCoins(target.id).toLocaleString()}** 🪙`
         )
-        .setFooter({ text: 'Flare Drop' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
       return message.reply({ embeds: [embed] });
     }
@@ -3479,7 +3488,7 @@ if (sub === 'clear') {
           `**${message.author.username}** gave **${amount.toLocaleString()}** coins to **${target.username}**\n\n` +
           `Your new balance: **${getCoins(message.author.id).toLocaleString()}** 🪙`
         )
-        .setFooter({ text: 'Flare Drop' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
       return message.reply({ embeds: [embed] });
     }
@@ -3519,7 +3528,7 @@ if (sub === 'clear') {
             : `You lost **${amount.toLocaleString()}** coins.`) +
           `\n\nNew balance: **${getCoins(message.author.id).toLocaleString()}** 🪙`
         )
-        .setFooter({ text: 'Flare Drop • Coin Flip' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
       return message.reply({ embeds: [embed] });
     }
@@ -3549,7 +3558,7 @@ if (sub === 'clear') {
           `You claimed **${reward.toLocaleString()}** coins!\n` +
           `New balance: **${getCoins(uid).toLocaleString()}** 🪙`
         )
-        .setFooter({ text: 'Flare Drop • Resets in 24h' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
       return message.reply({ embeds: [embed] });
     }
@@ -3582,7 +3591,7 @@ if (sub === 'clear') {
         .setColor(0xf1c40f)
         .setTitle('🏆 Flare Richest')
         .setDescription(lines.join('\n'))
-        .setFooter({ text: 'Flare Drop' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
       return message.reply({ embeds: [embed] });
     }
@@ -3603,7 +3612,7 @@ if (sub === 'clear') {
           ? `You have **${bal.toLocaleString()}** coins.`
           : `**${target.username}** has **${bal.toLocaleString()}** coins.`
       )
-      .setFooter({ text: 'Flare Drop' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp();
     return message.reply({ embeds: [embed] });
   }
@@ -3747,7 +3756,7 @@ if (sub === 'clear') {
         `**Members in the group:** \`1/20\`\n\n` +
         `**Host:** ${message.author.username}`
       )
-      .setFooter({ text: 'Flare Drop • Team Finder' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp();
 
     return message.reply({ embeds: [embed] });
@@ -4024,7 +4033,7 @@ if (sub === 'clear') {
           '━━━━━━━━━━━━━━━━━━━━'
         ].join('\n')
       )
-      .setFooter({ text: 'Flare Drop • Staff Management' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp();
 
     // Simple pagination if description would be too long (> 4000 chars)
@@ -4146,7 +4155,7 @@ if (sub === 'clear') {
         { name: '🌸 Capes', value: 'Starter Free Cape', inline: false },
         { name: '🔑 Combo', value: `||${hit.email}:${hit.pass}||`, inline: false }
       )
-      .setFooter({ text: 'Verified by Flare Drop ⭐⭐⭐⭐⭐' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp(hit.uploadedAt ? new Date(hit.uploadedAt) : new Date());
 
     // Public skin (no login) via mc-heads
@@ -5558,17 +5567,18 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     };
     saveData();
     const emb = new EmbedBuilder()
-      .setColor(0x57f287)
-      .setTitle('✅ Verification')
+      .setColor(BRAND.color)
+      .setTitle('Verification')
       .setDescription(
-        `Welcome to **${message.guild.name}**!\n\n` +
-          `You can only use **this channel** until you verify.\n\n` +
-          `1. Click **Verify**\n` +
-          `2. Answer the math question in your **DMs**\n` +
-          `3. Get ${role} and unlock the server\n\n` +
-          `⚠️ Allow DMs from server members.`
+        `Welcome to **${message.guild.name}**\n\n` +
+          `You only have access to **this channel** until you verify.\n\n` +
+          `**Steps**\n` +
+          `› Click **Verify** below\n` +
+          `› Solve the math question in your **DMs**\n` +
+          `› Receive ${role} and unlock the server\n\n` +
+          `Enable **DMs from server members** first.`
       )
-      .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+      .setFooter({ text: BRAND.footer })
       .setTimestamp();
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -5885,10 +5895,10 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
         );
       }
       return new EmbedBuilder()
-        .setColor(0x5865f2)
+        .setColor(BRAND.color)
         .setTitle('Invite leaderboard')
         .setDescription(lines.join('\n\n'))
-        .setFooter({ text: 'Flare · Invites' })
+        .setFooter({ text: BRAND.footer })
         .setTimestamp();
     }
 
@@ -6102,15 +6112,15 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
         try {
           name = (await client.users.fetch(rows[i].id)).username;
         } catch (_) {}
-        lines.push(`**#${i + 1}** ${name} — **${rows[i].total}** invites`);
+        lines.push(`**#${i + 1}** › **${name}** — **${rows[i].total}** invites`);
       }
       return message.reply({
         embeds: [
           new EmbedBuilder()
-            .setColor(0x5865f2)
+            .setColor(BRAND.color)
             .setTitle('Invite leaderboard')
             .setDescription(lines.join('\n'))
-            .setFooter({ text: 'Flare · Invites' })
+            .setFooter({ text: BRAND.footer })
             .setTimestamp()
         ]
       });
@@ -6330,15 +6340,15 @@ client.on('interactionCreate', async (interaction) => {
           await interaction.user.send({
             embeds: [
               new EmbedBuilder()
-                .setColor(0x5865f2)
-                .setTitle('🔐 Verification')
+                .setColor(BRAND.colorBlurple)
+                .setTitle('Verification challenge')
                 .setDescription(
                   `Solve this to verify in **${interaction.guild.name}**:\n\n` +
                     `## ${challenge.q}\n\n` +
                     `Reply to this DM with the **number only**.\n` +
                     `Example: if the answer is 12, type \`12\``
                 )
-                .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+                .setFooter({ text: BRAND.footer })
             ]
           });
           return interaction.reply({
@@ -6744,7 +6754,7 @@ client.on('interactionCreate', async (interaction) => {
           .setDescription(
             `Welcome to **${interaction.guild.name}**!\n\nClick **Verify** below to unlock the server.\nI will DM you a math question. Answer correctly to get ${role}.`
           )
-          .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' });
+          .setFooter({ text: BRAND.footer });
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('flare_verify_start').setLabel('Verify').setStyle(ButtonStyle.Success).setEmoji('✅')
         );
