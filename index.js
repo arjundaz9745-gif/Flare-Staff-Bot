@@ -6823,48 +6823,59 @@ client.on('guildBanAdd', async (ban) => {
 
 
 (async () => {
-  process.stdout.write('Boot: about to connect Discord...\n');
-  console.log('Token chars:', TOKEN.length, '| starts with:', (TOKEN || '').slice(0, 4) || '(empty)');
+  console.log('Boot: Discord connect starting…');
+  console.log('Token chars:', TOKEN.length, '| prefix:', (TOKEN || '').slice(0, 5) || '(empty)');
 
-  // 1) Validate token with REST before gateway (fails fast if bad token)
+  if (!TOKEN || TOKEN.length < 50) {
+    console.error('No valid DISCORD_BOT_TOKEN. Set it on Render and redeploy.');
+    return;
+  }
+
+  // REST check is informational only — never block gateway except hard 401
   try {
     const res = await fetch('https://discord.com/api/v10/users/@me', {
       headers: { Authorization: 'Bot ' + TOKEN }
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      console.error('TOKEN CHECK FAILED:', res.status, body.message || JSON.stringify(body));
-      console.error('Reset token in Discord Developer Portal → Bot, paste into Render DISCORD_BOT_TOKEN, redeploy.');
+    if (res.status === 401) {
+      console.error('Invalid token (401). Reset Bot token in Developer Portal, update Render, wait 2 min, deploy once.');
       return;
     }
-    console.log('TOKEN OK — bot user:', body.username + '#' + (body.discriminator || '0'), 'id:', body.id);
+    if (res.status === 429) {
+      const wait = Math.min(Number(body.retry_after || 15), 60);
+      console.warn('Rate limited (429). Waiting', wait, 'seconds…');
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    } else if (res.ok) {
+      console.log('Token OK —', body.username, '(' + body.id + ')');
+    } else {
+      console.warn('Token check HTTP', res.status, '— continuing to gateway…');
+    }
   } catch (e) {
-    console.error('TOKEN CHECK network error:', e.message);
-    console.error('Render cannot reach discord.com — try redeploy or different host.');
-    return;
+    console.warn('Token check failed:', e.message, '— continuing to gateway…');
   }
 
-  client.on('error', (e) => console.error('Discord client error:', e.message));
-  client.on('shardError', (e) => console.error('Discord shard error:', e.message));
+  client.on('error', (e) => console.error('Discord error:', e.message));
+  client.on('shardError', (e) => console.error('Shard error:', e.message));
   client.on('warn', (m) => console.warn('Discord warn:', m));
 
-  const loginTimer = setTimeout(() => {
-    console.error('Still no Discord READY after 25s. Enable Message Content + Server Members intents, then reset token.');
-  }, 25000);
-
-  const clearT = () => clearTimeout(loginTimer);
-  client.once('ready', clearT);
-  client.once('clientReady', clearT);
-
-  try {
-    await client.login(TOKEN);
-    process.stdout.write('Discord login() resolved — should be online now.\n');
-  } catch (e) {
-    clearT();
-    console.error('DISCORD LOGIN FAILED:', e && (e.message || e));
-    console.error('Enable intents: Message Content + Server Members (Developer Portal → Bot).');
+  // Retry login up to 5 times with backoff (handles 429 / flaky network)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      console.log('Gateway login attempt', attempt + '/5 …');
+      await client.login(TOKEN);
+      console.log('Discord ONLINE as', client.user && client.user.tag);
+      return;
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      console.error('Login failed:', msg);
+      if (/invalid token|401/i.test(msg)) {
+        console.error('Token rejected. Reset token in portal → update Render env → deploy once.');
+        return;
+      }
+      const delay = attempt * 10;
+      console.warn('Retry in', delay, 'seconds…');
+      await new Promise((r) => setTimeout(r, delay * 1000));
+    }
   }
+  console.error('Could not connect after 5 attempts. Wait 15 minutes (Discord rate limit), then redeploy once only.');
 })();
-
-
-
