@@ -1489,15 +1489,21 @@ const STOCK_CMDS = new Set([
 ]);
 const MOD_CMDS = new Set([
   'ban', 'unban', 'kick', 'timeout', 'mute', 'unmute', 'untimeout',
-  'warn', 'warnings', 'purge', 'clearmsg', 'nuke',
-  'lock', 'unlock', 'slowmode', 'nick', 'role',
-  'gstart', 'giveaway', 'greroll',
+  'warn', 'warnings', 'purge', 'clearmsg', 'prune', 'nuke',
+  'lock', 'unlock', 'slowmode', 'nick', 'nickname', 'role',
+  'gstart', 'giveaway', 'greroll', 'gend',
   'ticketpanel', 'ticket-panel', 'setwelcome',
   'protection', 'automod', 'security',
   'staff', 'staffstats', 'online',
   'teamup', 'close', 'leave', 'team',
   'autorole', 'autoroles', 'autoreact', 'autoreaction',
-  'react', 'say', 'embed', 'announce',
+  'react', 'say', 'embed', 'announce', 'poll',
+  'userinfo', 'ui', 'avatar', 'av', 'banner',
+  'roleinfo', 'channelinfo', 'emoji', 'emojis',
+  'addrole', 'removerole', 'softban', 'massban',
+  'hide', 'show', 'snipe', 'editsnipe',
+  'afk', 'remind', 'reminder', 'ping', 'uptime',
+  'membercount', 'botinfo', 'invite', 'support',
   'modhelp', 'help'
 ]);
 
@@ -1577,8 +1583,10 @@ function buildFullHelpEmbeds() {
         '`' + m + 'ban` `' + m + 'unban` `' + m + 'kick`',
         '`' + m + 'timeout` / `' + m + 'mute` · `' + m + 'unmute`',
         '`' + m + 'warn` `' + m + 'warnings`',
-        '`' + m + 'purge` `' + m + 'lock` `' + m + 'unlock` `' + m + 'slowmode`',
-        '`' + m + 'nick` `' + m + 'role add|remove`',
+        '`' + m + 'purge <1-100>` [`@user`] · `' + m + 'lock` `' + m + 'unlock` `' + m + 'slowmode`',
+        '`' + m + 'hide` `' + m + 'show` `' + m + 'nick` `' + m + 'role add|remove`',
+        '`' + m + 'softban` `' + m + 'say` `' + m + 'embed` `' + m + 'poll` `' + m + 'snipe`',
+        '`' + m + 'userinfo` `' + m + 'avatar` `' + m + 'ping` `' + m + 'uptime` `' + m + 'botinfo`',
         '`' + m + 'gstart <time> <winners> <prize>`',
         '`' + m + 'greroll <messageId>`',
         '`' + m + 'ticketpanel [text]` + optional image',
@@ -2361,6 +2369,20 @@ client.on('presenceUpdate', async (before, after) => {
     const has = after.roles.cache.has(FREE_GEN_ROLE_ID);
     if (ok && !has) await after.roles.add(role).catch(() => {});
     if (!ok && has) await after.roles.remove(role).catch(() => {});
+  } catch (_) {}
+});
+
+
+client.on('messageDelete', async (message) => {
+  try {
+    if (!message.guild || message.author?.bot) return;
+    if (!data.snipes) data.snipes = {};
+    data.snipes[message.channel.id] = {
+      content: message.content || '',
+      tag: message.author?.tag,
+      avatar: message.author?.displayAvatarURL?.({ size: 64 }),
+      at: Date.now()
+    };
   } catch (_) {}
 });
 
@@ -4801,6 +4823,251 @@ ${message.author}'s **staff application is ready** — please review.`
       await member.timeout(null);
       return message.reply(`Timeout removed for **${user.tag}**`);
     }
+  }
+
+
+
+  // ========== ?purge / ?clearmsg / ?prune ==========
+  if (cmd === 'purge' || cmd === 'clearmsg' || cmd === 'prune') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages) &&
+        !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply('Need **Manage Messages**.');
+    }
+    if (!message.guild.members.me.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      return message.reply('I need **Manage Messages** in this channel.');
+    }
+    let amount = parseInt(args[0], 10);
+    if (!amount || amount < 1) {
+      return message.reply('Usage: `?purge <1-100>` · optional `@user` to filter');
+    }
+    amount = Math.min(amount, 100);
+    const target = message.mentions.users.first();
+    try {
+      await message.delete().catch(() => {});
+      let deleted = 0;
+      if (target) {
+        const fetched = await message.channel.messages.fetch({ limit: 100 });
+        const filtered = [...fetched.values()]
+          .filter((m) => m.author.id === target.id)
+          .slice(0, amount);
+        if (!filtered.length) return message.channel.send('No messages found for that user.').then((m) => setTimeout(() => m.delete().catch(() => {}), 4000));
+        const res = await message.channel.bulkDelete(filtered, true);
+        deleted = res.size;
+      } else {
+        const res = await message.channel.bulkDelete(amount, true);
+        deleted = res.size;
+      }
+      const conf = await message.channel.send(`🗑️ Deleted **${deleted}** message(s).`);
+      setTimeout(() => conf.delete().catch(() => {}), 4000);
+    } catch (e) {
+      return message.channel.send('Purge failed: ' + (e.message || e) + ' (messages older than 14 days cannot be bulk-deleted).').catch(() => {});
+    }
+    return;
+  }
+
+  // ========== ?lock / ?unlock ==========
+  if (cmd === 'lock') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const ch = message.mentions.channels.first() || message.channel;
+    await ch.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false }).catch(() => null);
+    return message.reply(`🔒 Locked ${ch}`);
+  }
+  if (cmd === 'unlock') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const ch = message.mentions.channels.first() || message.channel;
+    await ch.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null }).catch(() => null);
+    return message.reply(`🔓 Unlocked ${ch}`);
+  }
+
+  // ========== ?slowmode ==========
+  if (cmd === 'slowmode' || cmd === 'slow') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const secs = parseInt(args[0], 10);
+    if (isNaN(secs) || secs < 0 || secs > 21600) {
+      return message.reply('Usage: `?slowmode <seconds 0-21600>`');
+    }
+    await message.channel.setRateLimitPerUser(secs).catch(() => null);
+    return message.reply(secs === 0 ? 'Slowmode **off**.' : `Slowmode set to **${secs}s**.`);
+  }
+
+  // ========== ?hide / ?show channel ==========
+  if (cmd === 'hide') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const ch = message.mentions.channels.first() || message.channel;
+    await ch.permissionOverwrites.edit(message.guild.roles.everyone, { ViewChannel: false }).catch(() => null);
+    return message.reply(`👁️‍🗨️ Hidden ${ch}`);
+  }
+  if (cmd === 'show') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const ch = message.mentions.channels.first() || message.channel;
+    await ch.permissionOverwrites.edit(message.guild.roles.everyone, { ViewChannel: null }).catch(() => null);
+    return message.reply(`👁️ Shown ${ch}`);
+  }
+
+  // ========== ?nick ==========
+  if (cmd === 'nick' || cmd === 'nickname') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const member = message.mentions.members.first() || message.member;
+    const nick = args.filter((a) => !a.startsWith('<@')).join(' ') || null;
+    await member.setNickname(nick).catch((e) => message.reply('Failed: ' + e.message));
+    return message.reply(nick ? `Nickname set to **${nick}**` : `Nickname cleared for **${member.user.username}**`);
+  }
+
+  // ========== ?role add|remove ==========
+  if (cmd === 'role' || cmd === 'addrole' || cmd === 'removerole') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    let sub = (args[0] || '').toLowerCase();
+    let userArg = message.mentions.members.first();
+    let roleArg = message.mentions.roles.first();
+    if (cmd === 'addrole') sub = 'add';
+    if (cmd === 'removerole') sub = 'remove';
+    if (!roleArg) {
+      const rid = (args.find((a) => /^\d{15,}$/.test(a)) || '').trim();
+      if (rid) roleArg = message.guild.roles.cache.get(rid);
+    }
+    if (!userArg || !roleArg) {
+      return message.reply('Usage: `?role add @user @role` · `?role remove @user @role`');
+    }
+    if (sub === 'add' || sub === 'give') {
+      await userArg.roles.add(roleArg).catch((e) => message.reply('Failed: ' + e.message));
+      return message.reply(`Added **${roleArg.name}** to **${userArg.user.username}**`);
+    }
+    if (sub === 'remove' || sub === 'take') {
+      await userArg.roles.remove(roleArg).catch((e) => message.reply('Failed: ' + e.message));
+      return message.reply(`Removed **${roleArg.name}** from **${userArg.user.username}**`);
+    }
+    return message.reply('Usage: `?role add|remove @user @role`');
+  }
+
+  // ========== ?softban ==========
+  if (cmd === 'softban') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const user = message.mentions.users.first();
+    if (!user) return message.reply('Usage: `?softban @user [reason]`');
+    const reason = args.slice(1).join(' ') || 'Softban';
+    await message.guild.members.ban(user.id, { deleteMessageSeconds: 86400, reason }).catch(() => null);
+    await message.guild.members.unban(user.id, 'Softban unban').catch(() => null);
+    return message.reply(`Softbanned **${user.tag}** (ban + unban, messages cleaned).`);
+  }
+
+  // ========== ?say / ?embed / ?announce ==========
+  if (cmd === 'say') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const text = args.join(' ');
+    if (!text) return message.reply('Usage: `?say <message>`');
+    await message.delete().catch(() => {});
+    return message.channel.send({ content: text.slice(0, 2000), allowedMentions: { parse: [] } });
+  }
+  if (cmd === 'embed' || cmd === 'announce') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const text = args.join(' ');
+    if (!text) return message.reply('Usage: `?embed <title | description>` or `?embed message`');
+    const parts = text.split('|').map((s) => s.trim());
+    const emb = new EmbedBuilder()
+      .setColor(0xbe2c71)
+      .setDescription(parts[1] || parts[0])
+      .setFooter({ text: message.guild.name })
+      .setTimestamp();
+    if (parts[1]) emb.setTitle(parts[0].slice(0, 256));
+    await message.delete().catch(() => {});
+    return message.channel.send({ embeds: [emb] });
+  }
+
+  // ========== ?poll ==========
+  if (cmd === 'poll') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const q = args.join(' ');
+    if (!q) return message.reply('Usage: `?poll <question>`');
+    const emb = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('📊 Poll')
+      .setDescription(q)
+      .setFooter({ text: 'React to vote' });
+    const msg = await message.channel.send({ embeds: [emb] });
+    await msg.react('👍').catch(() => {});
+    await msg.react('👎').catch(() => {});
+    return;
+  }
+
+  // ========== ?userinfo / ?avatar ==========
+  if (cmd === 'userinfo' || cmd === 'ui' || cmd === 'whois') {
+    const user = message.mentions.users.first() || message.author;
+    const member = message.guild.members.cache.get(user.id) || await message.guild.members.fetch(user.id).catch(() => null);
+    const emb = new EmbedBuilder()
+      .setColor(0xbe2c71)
+      .setTitle(user.username)
+      .setThumbnail(user.displayAvatarURL({ size: 256 }))
+      .addFields(
+        { name: 'ID', value: user.id, inline: true },
+        { name: 'Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
+        { name: 'Joined', value: member?.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : '—', inline: true },
+        { name: 'Roles', value: member ? [...member.roles.cache.filter((r) => r.id !== message.guild.id).values()].slice(0, 15).map((r) => r.name).join(', ') || 'None' : '—' }
+      );
+    return message.reply({ embeds: [emb] });
+  }
+  if (cmd === 'avatar' || cmd === 'av') {
+    const user = message.mentions.users.first() || message.author;
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setTitle(`${user.username}'s avatar`)
+          .setImage(user.displayAvatarURL({ size: 512 }))
+      ]
+    });
+  }
+  if (cmd === 'banner') {
+    const user = message.mentions.users.first() || message.author;
+    const full = await client.users.fetch(user.id, { force: true }).catch(() => user);
+    const banner = full.bannerURL?.({ size: 512 });
+    if (!banner) return message.reply('No banner.');
+    return message.reply({ embeds: [new EmbedBuilder().setColor(0xbe2c71).setImage(banner).setTitle(`${user.username}'s banner`)] });
+  }
+
+  // ========== ?ping / ?uptime / ?botinfo / ?membercount ==========
+  if (cmd === 'ping') {
+    const sent = await message.reply('Pinging…');
+    return sent.edit(`🏓 Pong · **${sent.createdTimestamp - message.createdTimestamp}ms** · WS **${Math.round(client.ws.ping)}ms**`);
+  }
+  if (cmd === 'uptime') {
+    const s = Math.floor(process.uptime());
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return message.reply(`⏱️ Uptime: **${h}h ${m}m ${sec}s**`);
+  }
+  if (cmd === 'botinfo') {
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xbe2c71)
+          .setTitle('Flare Staff Bot')
+          .setDescription(
+            `Servers: **${client.guilds.cache.size}**\nPing: **${Math.round(client.ws.ping)}ms**\nUptime: **${Math.floor(process.uptime() / 60)}m**\nPrefixes: \`- $ ? !\``
+          )
+      ]
+    });
+  }
+  if (cmd === 'membercount') {
+    return message.reply(`👥 Members: **${message.guild.memberCount}**`);
+  }
+
+  // ========== ?snipe (last deleted message) ==========
+  if (cmd === 'snipe') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    const sn = data.snipes?.[message.channel.id];
+    if (!sn) return message.reply('Nothing to snipe.');
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setAuthor({ name: sn.tag || 'Unknown', iconURL: sn.avatar || undefined })
+          .setDescription(sn.content || '*empty*')
+          .setFooter({ text: 'Deleted message' })
+          .setTimestamp(sn.at || Date.now())
+      ]
+    });
   }
 
 
