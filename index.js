@@ -32,6 +32,7 @@ const PREFIX_MOD = process.env.PREFIX_MOD || '?'; // moderation, giveaways, auto
 const PREFIX_MOD_ALT = process.env.PREFIX_MOD_ALT || '!'; // alias for mod (e.g. !help)
 
 const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID || '1540362727581818947';
+const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID || '1554158102826188962'; // access after verify
 const FLARE_GUILD_ID = process.env.GUILD_ID || process.env.FLARE_GUILD_ID || '1540362727514701894';
 const DEFAULT_GUILD_ID = FLARE_GUILD_ID;
 
@@ -829,6 +830,38 @@ function getInviteBreakdown(guildId, userId) {
 function getUserInvites(guildId, userId) {
   return getInviteBreakdown(guildId, userId).total;
 }
+
+
+function getVerifyConfig(guildId) {
+  if (!data.verification) data.verification = {};
+  const cfg = data.verification[guildId];
+  if (cfg && cfg.roleId) return cfg;
+  // default verified role so panel still works after setup
+  if (VERIFIED_ROLE_ID) {
+    return { roleId: VERIFIED_ROLE_ID, channelId: null };
+  }
+  return null;
+}
+
+function randomMathChallenge() {
+  const roll = Math.floor(Math.random() * 3);
+  if (roll === 0) {
+    const a = 1 + Math.floor(Math.random() * 40);
+    const b = 1 + Math.floor(Math.random() * 40);
+    return { q: a + ' + ' + b + ' = ?', a: a + b };
+  }
+  if (roll === 1) {
+    const a = 10 + Math.floor(Math.random() * 30);
+    const b = 1 + Math.floor(Math.random() * 9);
+    return { q: a + ' − ' + b + ' = ?', a: a - b };
+  }
+  const a = 2 + Math.floor(Math.random() * 10);
+  const b = 2 + Math.floor(Math.random() * 8);
+  return { q: a + ' × ' + b + ' = ?', a: a * b };
+}
+
+if (!global.__flarePendingVerify) global.__flarePendingVerify = new Map();
+const pendingVerify = global.__flarePendingVerify;
 
 function buildFalconInviteEmbed(user, guildId) {
   const b = getInviteBreakdown(guildId, user.id);
@@ -1837,8 +1870,10 @@ client.on('guildMemberAdd', async (member) => {
   const guild = member.guild;
   let inviterId = null;
   try {
+    // Do NOT auto-role the verified/access role — that must come from verification only
     const roleId = data.autorole?.[guild.id];
-    if (roleId) {
+    const vRole = (data.verification?.[guild.id]?.roleId) || VERIFIED_ROLE_ID;
+    if (roleId && roleId !== vRole) {
       await member.roles.add(roleId, 'Auto-role').catch(() => {});
     }
   } catch (_) {}
@@ -2391,7 +2426,48 @@ client.on('messageDelete', async (message) => {
 });
 
 client.on('messageCreate', async (message) => {
-  if (!message.guild) return;
+  // ===== Verification math answer (DM only) =====
+  if (!message.guild) {
+    if (message.author.bot) return;
+    if (!pendingVerify.has(message.author.id)) return;
+    const pend = pendingVerify.get(message.author.id);
+    if (Date.now() - pend.at > 10 * 60 * 1000) {
+      pendingVerify.delete(message.author.id);
+      await message.reply('Verification expired. Click **Verify** again in the server.').catch(() => {});
+      return;
+    }
+    const ans = parseInt(String(message.content).replace(/[^0-9-]/g, ''), 10);
+    if (Number.isNaN(ans)) {
+      await message.reply('Send the **number** only, e.g. `55`').catch(() => {});
+      return;
+    }
+    if (ans !== pend.answer) {
+      const challenge = randomMathChallenge();
+      pend.answer = challenge.a;
+      pend.at = Date.now();
+      pendingVerify.set(message.author.id, pend);
+      await message.reply(`Wrong answer. Try again:\n## ${challenge.q}`).catch(() => {});
+      return;
+    }
+    pendingVerify.delete(message.author.id);
+    try {
+      const guild = client.guilds.cache.get(pend.guildId) || await client.guilds.fetch(pend.guildId);
+      const member = await guild.members.fetch(message.author.id);
+      await member.roles.add(pend.roleId, 'Math verification');
+      await message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('Verified!')
+            .setDescription(`You are verified in **${guild.name}**. Welcome!`)
+            .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+        ]
+      }).catch(() => {});
+    } catch (e) {
+      await message.reply('Correct, but I could not give the role. Ask staff. (' + (e.message || e) + ')').catch(() => {});
+    }
+    return;
+  }
 
   // ========== Falcon -i invite sync ==========
   if (message.author.bot && message.author.id === FALCON_BOT_ID) {
@@ -4961,8 +5037,8 @@ ${message.author}'s **staff application is ready** — please review.`
     const canEmoji =
       isStaff(message.member) ||
       message.member.permissions.has(PermissionFlagsBits.Administrator) ||
-      message.member.permissions.has(PermissionFlagsBits.ManageGuildExpressions) ||
-      message.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers);
+      (PermissionFlagsBits.ManageGuildExpressions && message.member.permissions.has(PermissionFlagsBits.ManageGuildExpressions)) ||
+      (PermissionFlagsBits.ManageEmojisAndStickers && message.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers));
     if (!canEmoji) {
       return message.reply('Need **Manage Expressions** permission or staff.');
     }
@@ -5460,6 +5536,55 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     return message.reply('Ticket panel posted.').then((m) => setTimeout(() => m.delete().catch(() => {}), 4000));
   }
 
+
+  // ========== ?verification — lock server until math DM verify ==========
+  if (cmd === 'verification' || cmd === 'setupverify' || cmd === 'verifysetup') {
+    if (!isStaff(message.member)) return message.reply('Staff only.');
+    let role =
+      message.mentions.roles.first() ||
+      message.guild.roles.cache.get(VERIFIED_ROLE_ID);
+    const ch = message.mentions.channels.first() || message.channel;
+    if (!role) {
+      return message.reply(
+        'Create role id `' + VERIFIED_ROLE_ID + '` or run `?verification @YourAccessRole`\n' +
+          'That role must be the **only** way to see other channels (set Discord permissions).'
+      );
+    }
+    if (!data.verification) data.verification = {};
+    data.verification[message.guild.id] = {
+      roleId: role.id,
+      channelId: ch.id,
+      updatedAt: Date.now()
+    };
+    saveData();
+    const emb = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('✅ Verification')
+      .setDescription(
+        `Welcome to **${message.guild.name}**!\n\n` +
+          `You can only use **this channel** until you verify.\n\n` +
+          `1. Click **Verify**\n` +
+          `2. Answer the math question in your **DMs**\n` +
+          `3. Get ${role} and unlock the server\n\n` +
+          `⚠️ Allow DMs from server members.`
+      )
+      .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+      .setTimestamp();
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('flare_verify_start')
+        .setLabel('Verify')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('✅')
+    );
+    await ch.send({ embeds: [emb], components: [row] });
+    return message.reply(
+      `Verification ready in ${ch}\n` +
+        `Access role: **${role.name}** (\`${role.id}\`)\n` +
+        `Remember: lock all other channels so only this role (and staff) can view them.`
+    );
+  }
+
   // ========== -setwelcome #channel ==========
   if (cmd === 'setwelcome') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
@@ -5864,7 +5989,7 @@ Staff: \`-genadd ${product} ...\` or \`-genstock\``
     }
 
     const u = message.mentions.users.first() || message.author;
-    return message.reply({ embeds: [buildFalconInviteEmbed(u, gid)] });
+    return message.reply({ embeds: [buildFalconInviteEmbed(u, gid, message.author.username)] });
   }
 
   // ========== -rmi / -removeinvite ==========
@@ -6179,6 +6304,55 @@ client.on('interactionCreate', async (interaction) => {
     }
     if (interaction.isButton()) {
       const id = interaction.customId;
+
+      // ===== Verification button =====
+      if (id === 'flare_verify_start') {
+        const cfg = getVerifyConfig(interaction.guildId);
+        if (!cfg || !cfg.roleId) {
+          return interaction.reply({
+            content: 'Verification is not set up. Staff: `?verification @role`',
+            ephemeral: true
+          });
+        }
+        // Already has role?
+        const member = interaction.member;
+        if (member.roles.cache.has(cfg.roleId)) {
+          return interaction.reply({ content: 'You are already verified.', ephemeral: true });
+        }
+        const challenge = randomMathChallenge();
+        pendingVerify.set(interaction.user.id, {
+          answer: challenge.a,
+          guildId: interaction.guildId,
+          roleId: cfg.roleId,
+          at: Date.now()
+        });
+        try {
+          await interaction.user.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0x5865f2)
+                .setTitle('🔐 Verification')
+                .setDescription(
+                  `Solve this to verify in **${interaction.guild.name}**:\n\n` +
+                    `## ${challenge.q}\n\n` +
+                    `Reply to this DM with the **number only**.\n` +
+                    `Example: if the answer is 12, type \`12\``
+                )
+                .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' })
+            ]
+          });
+          return interaction.reply({
+            content: 'Check your **DMs** for a math question. Answer there to get verified.',
+            ephemeral: true
+          });
+        } catch (e) {
+          pendingVerify.delete(interaction.user.id);
+          return interaction.reply({
+            content: 'I could not DM you. Please enable **DMs from server members**, then click Verify again.',
+            ephemeral: true
+          });
+        }
+      }
 
       // Birthday memory journey (secret)
       if (id === 'bday_next' || id === 'bday_prev' || id === 'bday_claim') {
@@ -6553,6 +6727,29 @@ client.on('interactionCreate', async (interaction) => {
         }
         await postTicketPanel(interaction.channel, { description, bannerUrl, bannerAttachment });
         return reply({ content: 'Ticket panel posted.', ephemeral: true });
+      }
+      if (name === 'verification') {
+        if (!isStaff(interaction.member)) return reply('Staff only.');
+        const role =
+          interaction.options.getRole('role') ||
+          interaction.guild.roles.cache.get(VERIFIED_ROLE_ID);
+        const ch = interaction.options.getChannel('channel') || interaction.channel;
+        if (!role) return reply('Role not found. Set VERIFIED_ROLE_ID or pass role option.');
+        if (!data.verification) data.verification = {};
+        data.verification[interaction.guildId] = { roleId: role.id, channelId: ch.id, updatedAt: Date.now() };
+        saveData();
+        const emb = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle('✅ Verification')
+          .setDescription(
+            `Welcome to **${interaction.guild.name}**!\n\nClick **Verify** below to unlock the server.\nI will DM you a math question. Answer correctly to get ${role}.`
+          )
+          .setFooter({ text: 'Coded by DashWho · Enhanced by ! Abu Farhan' });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('flare_verify_start').setLabel('Verify').setStyle(ButtonStyle.Success).setEmoji('✅')
+        );
+        await ch.send({ embeds: [emb], components: [row] });
+        return reply(`Verification panel posted in ${ch}`);
       }
       if (name === 'setwelcome') {
         if (!isStaff(interaction.member)) return reply({ content: 'Staff only.', ephemeral: true });
