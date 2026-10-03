@@ -23,6 +23,8 @@ const {
   Routes
 } = require('discord.js');
 
+const { registerPingProtect } = require('./ping-protect');
+
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '').trim().replace(/^['"]|['"]$/g, '');
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
 const PREFIX = process.env.PREFIX || '-'; // legacy default
@@ -720,6 +722,8 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 console.log('Discord intents ready. Presence intent:', botIntents.includes(GatewayIntentBits.GuildPresences));
+
+registerPingProtect(client);
 
 function isStaff(member) {
   if (!member) return false;
