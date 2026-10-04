@@ -41,7 +41,6 @@ function tab(name) {
   });
   closeMenu();
   if (name === 'overview') loadOverview();
-  if (name === 'stock' || name === 'gen') refreshStock();
   if (name === 'methods') loadMethods();
   if (name === 'giveaways') loadGiveaways();
   if (name === 'warnings') loadWarnings();
@@ -253,12 +252,11 @@ document.querySelector('.side-nav').onclick = function (e) {
   if (b) tab(b.getAttribute('data-tab'));
 };
 
-document.getElementById('btnStock').onclick = function () {
-  refreshStock();
-};
-document.getElementById('btnGenRefresh').onclick = function () {
-  refreshStock();
-};
+// Stock UI removed — keep optional listeners only if elements exist
+var _btnStock = document.getElementById('btnStock');
+if (_btnStock) _btnStock.onclick = function () {};
+var _btnGenRefresh = document.getElementById('btnGenRefresh');
+if (_btnGenRefresh) _btnGenRefresh.onclick = function () {};
 document.getElementById('btnGwRefresh').onclick = function () {
   loadGiveaways();
 };
@@ -266,41 +264,10 @@ document.getElementById('btnWarnRefresh').onclick = function () {
   loadWarnings();
 };
 
-document.getElementById('btnGenAdd').onclick = async function () {
-  try {
-    var j = await api('/api/genadd', {
-      method: 'POST',
-      body: JSON.stringify({
-        product: document.getElementById('genProd').value,
-        lines: document.getElementById('genLines').value
-      })
-    });
-    document.getElementById('genMsg').innerHTML =
-      '<span class="ok">+' + j.added + ' (total ' + j.total + ')</span>';
-    document.getElementById('genLines').value = '';
-    refreshStock();
-  } catch (e) {
-    document.getElementById('genMsg').textContent = e.message;
-  }
-};
-
-document.getElementById('btnPayAdd').onclick = async function () {
-  try {
-    var j = await api('/api/payadd', {
-      method: 'POST',
-      body: JSON.stringify({
-        product: document.getElementById('payProd').value,
-        lines: document.getElementById('payLines').value
-      })
-    });
-    document.getElementById('payMsg').innerHTML =
-      '<span class="ok">+' + j.added + ' (total ' + j.total + ')</span>';
-    document.getElementById('payLines').value = '';
-    refreshStock();
-  } catch (e) {
-    document.getElementById('payMsg').textContent = e.message;
-  }
-};
+var _btnGenAdd = document.getElementById('btnGenAdd');
+if (_btnGenAdd) _btnGenAdd.onclick = function () {};
+var _btnPayAdd = document.getElementById('btnPayAdd');
+if (_btnPayAdd) _btnPayAdd.onclick = function () {};
 
 document.getElementById('methodsOut').onclick = async function (e) {
   var save = e.target.closest('.btn-save-m');

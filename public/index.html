@@ -48,8 +48,6 @@
       </div>
       <nav class="side-nav">
         <button type="button" data-tab="overview" class="nav-item active">Overview</button>
-        <button type="button" data-tab="stock" class="nav-item">Pay stock</button>
-        <button type="button" data-tab="gen" class="nav-item">Gen stock</button>
         <button type="button" data-tab="methods" class="nav-item">Methods</button>
         <button type="button" data-tab="giveaways" class="nav-item">Giveaways</button>
         <button type="button" data-tab="warnings" class="nav-item">Warnings</button>
@@ -70,55 +68,9 @@
         <p class="hint">Quick snapshot of live bot data. Use the menu for full tools.</p>
       </section>
 
-      <section id="tab-stock" class="panel hidden">
-        <h2>Pay stock</h2>
-        <div class="toolbar">
-          <button type="button" class="btn" id="btnStock">Refresh</button>
-        </div>
-        <div class="card-grid" id="stockOut"></div>
-        <div class="card form-card">
-          <h3>Add pay stock</h3>
-          <label>Product</label>
-          <select id="payProd">
-            <option value="mcfa">mcfa</option>
-            <option value="nitro">nitro</option>
-            <option value="netflix">netflix</option>
-            <option value="crunchyroll">crunchyroll</option>
-            <option value="steam">steam</option>
-          </select>
-          <label>Lines (one account per line)</label>
-          <textarea id="payLines" rows="5" placeholder="email:pass"></textarea>
-          <button type="button" class="btn primary" id="btnPayAdd">Add to pay stock</button>
-          <p id="payMsg"></p>
-        </div>
-      </section>
-
-      <section id="tab-gen" class="panel hidden">
-        <h2>Gen stock</h2>
-        <div class="toolbar">
-          <button type="button" class="btn" id="btnGenRefresh">Refresh</button>
-        </div>
-        <div class="card-grid" id="genOut"></div>
-        <div class="card form-card">
-          <h3>Add gen stock</h3>
-          <label>Product</label>
-          <select id="genProd">
-            <option value="mcfa">mcfa</option>
-            <option value="nitro">nitro</option>
-            <option value="netflix">netflix</option>
-            <option value="steam">steam</option>
-            <option value="crunchyroll">crunchyroll</option>
-          </select>
-          <label>Lines</label>
-          <textarea id="genLines" rows="5" placeholder="email:pass"></textarea>
-          <button type="button" class="btn primary" id="btnGenAdd">Add gen stock</button>
-          <p id="genMsg"></p>
-        </div>
-      </section>
-
       <section id="tab-methods" class="panel hidden">
         <h2>Methods</h2>
-        <p class="hint">Unlimited text methods (set / clear). Used by bot commands.</p>
+        <p class="hint">Unlimited text methods (set / clear). Used by bot commands. Also: <code>-methodname</code> to paste, <code>-methodname add</code> then send next message to save.</p>
         <div id="methodsOut"></div>
       </section>
 
