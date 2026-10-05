@@ -1,7 +1,7 @@
 {
-  "name": "flare-staff-bot",
-  "version": "1.0.0",
-  "description": "Flare Drop Staff Bot + Dashboard",
+  "name": "flarecore",
+  "version": "2.0.0",
+  "description": "FlareCore — Discord staff bot + dashboard",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

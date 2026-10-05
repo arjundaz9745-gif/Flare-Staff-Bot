@@ -132,7 +132,7 @@ async function handleProtectedPing(message) {
           '_Applies to everyone, including staff._'
         ].join('\n')
       )
-      .setFooter({ text: 'Flare · Protected Ping System' })
+      .setFooter({ text: 'FlareCore · Protected Ping System' })
       .setTimestamp();
 
     await message.channel
@@ -173,7 +173,7 @@ async function handleProtectedPing(message) {
         '_No exceptions for staff._'
       ].join('\n')
     )
-    .setFooter({ text: 'Flare · Protected Ping System' })
+    .setFooter({ text: 'FlareCore · Protected Ping System' })
     .setTimestamp();
 
   await message.channel

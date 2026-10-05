@@ -48,7 +48,7 @@ const BRAND = {
   colorGreen: 0x57f287,
   colorBlurple: 0x5865f2,
   footer: 'Coded by DashWho · Enhanced by ! Abu Farhan',
-  name: 'Flare Drop'
+  name: 'FlareCore'
 };
 
 // OpenAI — key usually starts with sk- (not project-). project- is often a Project ID.
@@ -616,7 +616,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return json(200, { users });
       }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('Flare Staff Bot online');
+      res.end('FlareCore online');
     } catch (e) {
       console.error('http', e);
       if (!res.headersSent) {
@@ -625,7 +625,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
   })
-  .listen(PORT, '0.0.0.0', () => console.log(`Flare dashboard + bot on port ${PORT}`));
+  .listen(PORT, '0.0.0.0', () => console.log(`FlareCore dashboard + bot on port ${PORT}`));
 
 
 function loadData() {
@@ -1338,7 +1338,7 @@ async function postTicketPanel(channel, { description, bannerUrl, bannerAttachme
   const custom = description && String(description).trim();
   const embed = new EmbedBuilder()
     .setColor(0xbe2c71)
-    .setAuthor({ name: 'Flare Drop · Support' })
+    .setAuthor({ name: 'FlareCore · Support' })
     .setTitle('Ticket panel')
     .setDescription(
       (custom ? custom + '\n\n' : '') +
@@ -1418,7 +1418,7 @@ async function createSupportTicket(guild, user, reason) {
 
   const embed = new EmbedBuilder()
     .setColor(0xbe2c71)
-    .setAuthor({ name: 'Flare Drop · Ticket' })
+    .setAuthor({ name: 'FlareCore · Ticket' })
     .setTitle('Your ticket is open')
     .setDescription(
       `Hey ${user} — thanks for reaching out.\n\n` +
@@ -1686,7 +1686,6 @@ async function onReady() {
         .addUserOption(o => o.setName('user').setDescription('User to pay').setRequired(true))
         .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…'))
         .addIntegerOption(o => o.setName('amount').setDescription('How many (default 1)')),
-      new SlashCommandBuilder().setName('claim').setDescription('Claim invite reward (use in ticket)'),
       new SlashCommandBuilder().setName('fgen').setDescription('Free gen — take 1 from gen stock')
         .addStringOption(o => o.setName('product').setDescription('mcfa / nitro / netflix…')),
       new SlashCommandBuilder().setName('pgen').setDescription('Paid gen — take 1 from gen stock')
@@ -1839,12 +1838,18 @@ async function onReady() {
         .addRoleOption(o => o.setName('role').setRequired(true))
     ].map(c => c.toJSON());
     await rest.put(Routes.applicationCommands(client.user.id), { body: cmds });
-    console.log('Slash commands registered (help pay claim stock fgen pgen …)');
+    console.log('Slash commands registered · FlareCore');
   } catch (e) {
     console.error('slash register', e.message);
   }
 
-  console.log(`Logged in as ${client.user.tag}`);
+  try {
+    await client.user.setPresence({
+      activities: [{ name: 'FlareCore', type: 3 }],
+      status: 'online'
+    });
+  } catch (_) {}
+  console.log(`Logged in as ${client.user.tag} · FlareCore`);
   for (const [, guild] of client.guilds.cache) {
     await cacheGuildInvites(guild);
   }
@@ -2050,81 +2055,8 @@ async function exportStockToChannel(message, kind, lines, label) {
 }
 
 
-async function askOpenAI(userText, username) {
-  let key = (OPENAI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
-  if (!key) return null;
-
-  // Valid secrets: sk-..., sk-proj-..., gsk_... (Groq)
-  // Invalid alone: project-xxxx without sk-
-  if (/^project-/i.test(key) && !/^sk-/i.test(key)) {
-    console.warn('OPENAI_API_KEY is a project id only. Use sk- / sk-proj- / gsk_ secret.');
-    return '__BAD_KEY_FORMAT__';
-  }
-
-  // gsk_ = ALWAYS Groq (ignore OPENAI_BASE_URL if it points at openai.com)
-  let base = OPENAI_BASE_URL || '';
-  if (/^gsk_/i.test(key)) {
-    base = 'https://api.groq.com/openai/v1';
-  } else if (!base) {
-    base = 'https://api.openai.com/v1';
-  }
-  base = String(base).replace(/\/$/, '');
-
-  let model = (OPENAI_MODEL || '').trim();
-  if (!model) {
-    model = /^gsk_/i.test(key) || /groq\.com/i.test(base)
-      ? 'openai/gpt-oss-20b'
-      : 'gpt-4o-mini';
-  }
-  // Map dead/wrong models when using Groq
-  if (/^gsk_/i.test(key) || /groq\.com/i.test(base)) {
-    if (/gpt-4o|gpt-4|gpt-3|o1|o3|llama-3\.1-8b|llama-3\.3-70b/i.test(model)) {
-      model = 'openai/gpt-oss-20b';
-    }
-  }
-
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: 'Bearer ' + key
-  };
-  // OpenAI org/project only (not used by Groq)
-  if (!/groq\.com/i.test(base)) {
-    if (process.env.OPENAI_ORG_ID) headers['OpenAI-Organization'] = process.env.OPENAI_ORG_ID.trim();
-    if (process.env.OPENAI_PROJECT_ID) headers['OpenAI-Project'] = process.env.OPENAI_PROJECT_ID.trim();
-  }
-
-  try {
-    const res = await fetch(base + '/chat/completions', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        temperature: 0.35,
-        max_tokens: 800,
-        messages: [
-          { role: 'system', content: AI_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content:
-              userText && userText.trim()
-                ? userText.trim()
-                : 'One short useful line about Flare Drop. No intro fluff.'
-          }
-        ]
-      })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const errMsg = data?.error?.message || res.statusText || String(res.status);
-      console.error('AI error', base, res.status, errMsg);
-      return '__API_ERROR__:' + errMsg;
-    }
-    const out = data?.choices?.[0]?.message?.content;
-    return out && String(out).trim() ? String(out).trim().slice(0, 1900) : null;
-  } catch (e) {
-    console.error('AI fetch', e.message);
-    return '__API_ERROR__:' + e.message;
-  }
+async function askOpenAI() {
+  return null; // AI fully removed from FlareCore
 }
 
 function ultimateFaqReply(text) {
@@ -2310,7 +2242,7 @@ function buildGiveawayLiveEmbed(g, hostTag) {
   const entries = (g.entries || []).length;
   return new EmbedBuilder()
     .setColor(0xf1c40f)
-    .setAuthor({ name: 'Flare Drop · Giveaway' })
+    .setAuthor({ name: 'FlareCore · Giveaway' })
     .setTitle('GIVEAWAY')
     .setDescription(
       `╭──────────────────╮\n` +
@@ -2555,7 +2487,7 @@ client.on('messageCreate', async (message) => {
   try {
     if (
       client.user &&
-      message.mentions.users.has(client.user.id) &&
+      false && message.mentions.users.has(client.user.id) && // AI disabled
       !message.mentions.everyone
     ) {
       const cleaned = message.content
@@ -2569,6 +2501,7 @@ client.on('messageCreate', async (message) => {
       if (!cleaned && message.mentions.roles.size > 0) {
         // no-op
       } else {
+        return; // AI removed — do not reply to @bot
         await message.channel.sendTyping().catch(() => {});
         // Hard FAQ first (owners / API / no OpenAI) — never let model override
         const hard = ultimateFaqReply(cleaned || '');
@@ -2581,7 +2514,8 @@ client.on('messageCreate', async (message) => {
         if (needsHard && hard && !/not sure on that/i.test(hard)) {
           replyText = hard;
         } else {
-          replyText = await askOpenAI(
+          replyText = null; // AI removed
+          void await askOpenAI(
             cleaned || 'Reply in one short useful line for Flare Drop. No intro fluff.',
             message.author.username
           );
@@ -2862,7 +2796,7 @@ client.on('messageCreate', async (message) => {
     cmd === 'buy' ||
     cmd === 'addstock'
   ) {
-    return message.reply('That command is disabled. Use methods: `$mcredeem` · `$nitromethod` · `$mccode` etc.');
+    return; // command removed
   }
 
   // ========== Methods only (stocks removed) ==========
@@ -2875,7 +2809,7 @@ client.on('messageCreate', async (message) => {
     const productKey = resolveProductKey(cmd);
     const meta = PRODUCT_STOCKS[productKey];
     if (!meta || meta.type !== 'method') {
-      return message.reply('That command is disabled. Use methods: `$mcredeem` · `$nitromethod` etc.');
+      return; // command removed
     }
     if (!isStaff(message.member)) return message.reply('Staff only.');
     const sub = (args[0] || '').toLowerCase();
@@ -3171,7 +3105,7 @@ if (sub === 'clear') {
       salaryMsg += `« Reward #${i + 1}: ||${acc}|| »\n`;
     });
     salaryMsg +=
-      `\nThank you for your hard work and dedication to Flare Drop! 🫡\n` +
+      `\nThank you for your hard work and dedication to FlareCore! 🫡\n` +
       `Keep up the great work! 🚀`;
 
     try {
@@ -3935,6 +3869,7 @@ if (sub === 'clear') {
   // ========== $claim ==========
   // In a ticket: show eligible rewards based on invites, then ping online staff
   if (cmd === 'claim') {
+    return; // claim removed
     if (!isTicketChannel(message.channel)) {
       return message.reply('`$claim` only works **inside tickets**.');
     }
@@ -4161,7 +4096,7 @@ if (sub === 'clear') {
     const ign = hit.username || null;
     const embed = new EmbedBuilder()
       .setColor(0x3b82f6)
-      .setAuthor({ name: 'Flare Drop • Hit' })
+      .setAuthor({ name: 'FlareCore • Hit' })
       .addFields(
         { name: '📧 Email', value: `||${hit.email}||`, inline: false },
         { name: '🔑 Password', value: `||${hit.pass}||`, inline: false },
@@ -4854,7 +4789,7 @@ ${message.author}'s **staff application is ready** — please review.`
 
   // ========== -cstatus removed (gen system gone) ==========
   if (cmd === 'cstatus') {
-    return message.reply('That command is disabled.');
+    return;
   }
 
 
@@ -6596,9 +6531,9 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      if (name === 'stock' || name === 'genstock' || name === 'genadd' || name === 'fgen' || name === 'pgen' || name === 'pay' || name === 'claim' || name === 'addstock' || name === 'genclear' || name === 'g3n' || name === 'cstatus') {
+      if (name === 'stock' || name === 'genstock' || name === 'genadd' || name === 'fgen' || name === 'pgen' || name === 'pay' || name === 'claim_removed' || name === 'addstock' || name === 'genclear' || name === 'g3n' || name === 'cstatus') {
         return reply({
-          content: 'That command is disabled. Use methods: `$mcredeem` · `$nitromethod` etc.',
+          content: 'Unknown command.',
           ephemeral: true
         });
       }
@@ -7039,7 +6974,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (name === 'cstatus' || name === 'fgen' || name === 'pgen') {
         return reply({
-          content: 'That command is disabled.',
+          content: 'Unknown command.',
           ephemeral: true
         });
       }
@@ -7110,11 +7045,8 @@ client.on('interactionCreate', async (interaction) => {
         return reply({ content: `Paid **${user.tag}** **${taken.length}× ${meta.label}**.` });
       }
 
-      if (name === 'claim') {
-        return reply({
-          content: 'Use `$claim` inside your reward **ticket** channel for the full claim flow.',
-          ephemeral: true
-        });
+      if (name === 'claim_removed') {
+        return reply({ content: 'Claim flow was removed.', ephemeral: true });
       }
 
       if (name === 'staff') {
