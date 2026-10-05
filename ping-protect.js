@@ -4,7 +4,7 @@
  *
  * Rules:
  *  - Anyone who pings a protected user gets: 1st = WARNING, 2nd+ = TIMEOUT
- *  - Staff are NOT exempt
+ *  - Staff role 1555427835143782460 is exempt (silent)
  *  - Self-ping by protected user is ignored
  *  - Bots are ignored
  */
@@ -28,6 +28,14 @@ const PING_DELETE_MSG = process.env.PING_PROTECT_DELETE_MSG !== 'false'; // dele
 const DATA_FILE = process.env.PING_PROTECT_DATA || path.join(__dirname, 'data', 'ping-strikes.json');
 
 const protectedSet = new Set(PROTECTED_PING_IDS);
+
+// Staff with this role are fully exempt (no warn / no timeout / no message)
+const STAFF_EXEMPT_ROLE_IDS = String(
+  process.env.PING_STAFF_EXEMPT_ROLES || '1555427835143782460'
+)
+  .split(/[,;\s]+/)
+  .map((s) => s.trim())
+  .filter((s) => /^\d{15,20}$/.test(s));
 
 // strikes[authorId] = { count, lastAt }
 let strikes = {};
@@ -104,7 +112,12 @@ async function handleProtectedPing(message) {
   const member = message.member;
   if (!member) return false;
 
-  // Staff do NOT get a free pass
+  // Staff role(s) — silent exempt (no warn, no timeout, no reply)
+  const isExemptStaff = STAFF_EXEMPT_ROLE_IDS.some(
+    (rid) => member.roles?.cache?.has(rid)
+  );
+  if (isExemptStaff) return false;
+
   const strike = addStrike(message.author.id);
   const me = message.guild.members.me;
   const canTimeout =
@@ -129,7 +142,7 @@ async function handleProtectedPing(message) {
           'This is your **first warning**.',
           `Next time you ping them → **timeout (${formatDuration(PING_TIMEOUT_MS)})**.`,
           '',
-          '_Applies to everyone, including staff._'
+          '_Do not ping protected users._'
         ].join('\n')
       )
       .setFooter({ text: 'FlareCore · Protected Ping System' })
@@ -170,7 +183,7 @@ async function handleProtectedPing(message) {
           ? `Timed out for **${formatDuration(PING_TIMEOUT_MS)}** (strike #${strike.count}).`
           : `Could not timeout (missing permission / hierarchy). Strike #${strike.count} recorded.`,
         '',
-        '_No exceptions for staff._'
+        '_Repeated pings = timeout._'
       ].join('\n')
     )
     .setFooter({ text: 'FlareCore · Protected Ping System' })
