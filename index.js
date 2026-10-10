@@ -114,36 +114,33 @@ const ANTINUKE_ENABLED = process.env.ANTINUKE_ENABLED !== 'false';
 // Methods only (all stocks removed)
 const PRODUCT_STOCKS = {
   // emojiNames = your server custom emoji names (case-insensitive). Bot resolves <:name:id> live.
-  mcredeem: { label: 'McRedeem Code', emoji: '🎟️', emojiNames: ['MINECRAFT', 'minecraft'], cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
-  mccode: { label: 'McCode Method', emoji: '📜', emojiNames: ['MINECRAFT', 'minecraft'], cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
-  xboxmethod: { label: 'XboxCode Method', emoji: '📘', emojiNames: ['xbox', 'Xbox'], cmd: ['xboxmethod', 'xboxcodemethod'], type: 'method' },
-  nitromethod: { label: 'Nitro Method', emoji: '💎', emojiNames: ['Nitro', 'nitro'], cmd: ['nitromethod', 'nitrom'], type: 'method' },
-  xboxgift: { label: 'Xbox Gift Card Method', emoji: '🎁', emojiNames: ['xbox', 'Xbox'], cmd: ['xboxgift', 'xboxgiftcard', 'xboxgiftmethod'], type: 'method' },
-  netflixnocc: { label: 'Netflix Method NoCC', emoji: '📺', emojiNames: ['netflix', 'Netflix'], cmd: ['netflixnocc', 'netflixmethod', 'nfnocc'], type: 'method' }
+  mcredeem: { label: 'McRedeem Code', emoji: '🎟️', emojiNames: ['MINECRAFT', 'minecraft', 'mc', 'grass'], cmd: ['mcredeem', 'mcredeemcode', 'redeem'], type: 'method' },
+  mccode: { label: 'McCode Method', emoji: '📜', emojiNames: ['MINECRAFT', 'minecraft', 'mc', 'grass'], cmd: ['mccode', 'mccodemethod', 'mccodes'], type: 'method' },
+  xboxmethod: { label: 'XboxCode Method', emoji: '📘', emojiNames: ['xbox', 'Xbox', 'xboxlogo'], cmd: ['xboxmethod', 'xboxcodemethod'], type: 'method' },
+  nitromethod: { label: 'Nitro Method', emoji: '💎', emojiNames: ['Nitro', 'nitro', 'discordnitro'], cmd: ['nitromethod', 'nitrom'], type: 'method' },
+  xboxgift: { label: 'Xbox Gift Card Method', emoji: '🎁', emojiNames: ['xbox', 'Xbox', 'xboxlogo'], cmd: ['xboxgift', 'xboxgiftcard', 'xboxgiftmethod'], type: 'method' },
+  netflixnocc: { label: 'Netflix Method NoCC', emoji: '📺', emojiNames: ['netflix', 'Netflix', 'netflixlogo'], cmd: ['netflixnocc', 'netflixmethod', 'nfnocc'], type: 'method' }
 };
 
 // Pending method-add flow: userId → { key, expiresAt }
 const pendingMethodAdds = new Map();
 
+/** Pick server emoji by name list — prefers ANIMATED, else static, else unicode fallback */
+function ge(guild, names, fallback = '•') {
+  if (!guild?.emojis?.cache) return fallback;
+  const list = (Array.isArray(names) ? names : [names]).filter(Boolean).map((n) => String(n).toLowerCase());
+  const hits = guild.emojis.cache.filter((em) => em.name && list.includes(em.name.toLowerCase()));
+  if (!hits.size) return fallback;
+  const animated = hits.find((em) => em.animated);
+  return (animated || hits.first()).toString(); // <a:name:id> or <:name:id>
+}
+
 /** Resolve server custom emoji by name, else fallback unicode */
 function stockEmoji(guild, meta) {
   const fallback = (meta && meta.emoji) || '•';
-  if (!guild || !guild.emojis || !meta) return fallback;
-  const names = meta.emojiNames || [];
-  for (const name of names) {
-    const found = guild.emojis.cache.find(
-      (em) => em.name && em.name.toLowerCase() === String(name).toLowerCase()
-    );
-    if (found) return found.toString(); // <:name:id> or <a:name:id>
-  }
-  // also try product key / label
-  for (const name of [meta.label, ...(meta.cmd || [])]) {
-    const found = guild.emojis.cache.find(
-      (em) => em.name && em.name.toLowerCase() === String(name).toLowerCase()
-    );
-    if (found) return found.toString();
-  }
-  return fallback;
+  if (!guild || !meta) return fallback;
+  const names = [...(meta.emojiNames || []), meta.label, ...(meta.cmd || [])].filter(Boolean);
+  return ge(guild, names, fallback);
 }
 
 
@@ -1537,7 +1534,7 @@ const STOCK_CMDS = new Set([
   'netflixnocc', 'netflixmethod', 'nfnocc',
   // keep some legacy names so they hit the "removed" reply
   'stock', 'mcfa', 'pay', 'buy', 'genstock', 'gstock', 'g3n', 'genadd', 'genclear',
-  'fgen', 'pgen', 'cstatus', 'claim', 'donut', 'hypixel', 'nitro', 'netflix', 'steam', 'xbox',
+  'fgen', 'pgen', 'cstatus', 'donut', 'hypixel', 'nitro', 'netflix', 'steam', 'xbox',
   'custom', 'custompay', 'salary', 'clear', 'format'
 ]);
 const MOD_CMDS = new Set([
@@ -3810,15 +3807,10 @@ if (sub === 'clear') {
   // ========== $claim ==========
   // In a ticket: show eligible rewards based on invites, then ping online staff
   if (cmd === 'claim') {
-    return; // claim removed
-    if (!isTicketChannel(message.channel)) {
-      return message.reply('`$claim` only works **inside tickets**.');
-    }
-    await startRewardClaimFlow(message.channel, message.author);
-    return;
+    return message.reply('`$claim` has been **removed**.');
   }
 
-  // ========== -staffstats ==========
+    // ========== -staffstats ==========
   if (cmd === 'staffstats') {
     if (!isStaff(message.member)) return message.reply('Staff only.');
 
@@ -6078,7 +6070,7 @@ client.on('channelCreate', async (channel) => {
 
     if (!opener) {
       await channel.send(
-        '🎁 Welcome! Use `$claim` to choose a reward based on your invites.'
+        '🎁 Welcome! Staff will help you with rewards.'
       ).catch(() => {});
       return;
     }
