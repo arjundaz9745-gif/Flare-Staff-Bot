@@ -23,8 +23,6 @@ const {
   Routes
 } = require('discord.js');
 
-const { registerPingProtect } = require('./ping-protect');
-
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '').trim().replace(/^['"]|['"]$/g, '');
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '';
 const PREFIX = process.env.PREFIX || '-'; // legacy default
@@ -725,7 +723,6 @@ const client = new Client({
 });
 console.log('Discord intents ready. Presence intent:', botIntents.includes(GatewayIntentBits.GuildPresences));
 
-registerPingProtect(client);
 
 function isStaff(member) {
   if (!member) return false;
@@ -2552,63 +2549,7 @@ client.on('messageCreate', async (message) => {
 
 
   // ========== ANTI MASS-PING ==========
-  // If the same user is mentioned 3+ times quickly by one person → 3 day timeout
-  try {
-    if (message.mentions.users.size > 0 && message.member && message.guild.members.me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-      const now = Date.now();
-      for (const [targetId] of message.mentions.users) {
-        if (targetId === message.author.id) continue; // ignore self-pings
-
-        // Never punish for pinging someone who has the Owner role
-        const targetMember = message.guild.members.cache.get(targetId) ||
-          await message.guild.members.fetch(targetId).catch(() => null);
-        if (targetMember && OWNER_ROLE_ID && targetMember.roles.cache.has(OWNER_ROLE_ID)) {
-          continue;
-        }
-
-        const key = `${message.author.id}:${targetId}`;
-        let times = recentMentions.get(key) || [];
-        const _mpWin = getProtection().massPingWindowMs || MASS_PING_WINDOW_MS;
-        times = times.filter((t) => now - t < _mpWin);
-        times.push(now);
-        recentMentions.set(key, times);
-
-        if (times.length >= (getProtection().massPingLimit || MASS_PING_LIMIT)) {
-          recentMentions.delete(key);
-          // Apply 3-day timeout
-          await message.member.timeout(MASS_PING_TIMEOUT_MS, `Anti-raid: mass pinged the same user ${MASS_PING_LIMIT}+ times`);
-          await message.reply(
-            `⏱️ **${message.author.username}** has been timed out for **3 days** for mass-pinging.`
-          ).catch(() => {});
-
-          // Optional log
-          if (getProtection().logChannelId || ANTIRAID_LOG_CHANNEL_ID) {
-            const logCh = message.guild.channels.cache.get(ANTIRAID_LOG_CHANNEL_ID);
-            if (logCh) {
-              const embed = new EmbedBuilder()
-                .setColor(0xed4245)
-                .setTitle('🛡️ Anti-Raid — Mass Ping')
-                .setDescription(
-                  `**User:** ${message.author.tag} (\`${message.author.id}\`)
-` +
-                  `**Target:** <@${targetId}>
-` +
-                  `**Action:** Timed out for 3 days
-` +
-                  `**Channel:** ${message.channel}`
-                )
-                .setTimestamp();
-              logCh.send({ embeds: [embed] }).catch(() => {});
-            }
-          }
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Mass-ping protection error:', e.message);
-  }
-
+  // (ping protection system removed)
 
   // ========== AUTO-MOD: spam + bad words ==========
   try {
